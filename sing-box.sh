@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.1.3"
+SCRIPT_VER="2.1.4"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -177,9 +177,20 @@ detect_certs() {
       CERT_MAP["$domain"]="$c|$k"; CERT_SRC["$domain"]="certbot 自动检测"
     fi
   done
+  # 用户手动放证书的常见目录：/root/cert/<域名>/fullchain.pem + privkey.pem
+  for d in /root/cert/*/; do
+    [ -d "$d" ] || continue
+    domain=$(basename "$d"); [[ "$domain" == .* ]] && continue
+    c="${d}fullchain.pem"; k="${d}privkey.pem"
+    if [ -f "$c" ] && [ -f "$k" ] && cert_valid_for "$c" "$domain"; then
+      CERT_MAP["$domain"]="$c|$k"; CERT_SRC["$domain"]="/root/cert 自动检测"
+    fi
+  done
   for f in "$SB_CERTS"/*.crt; do
     [ -f "$f" ] || continue
     base=$(basename "$f" .crt); k="$SB_CERTS/${base}.key"
+    # 已有正式证书的不被自签覆盖
+    [ -n "${CERT_MAP[$base]:-}" ] && continue
     if [ -f "$k" ] && cert_valid_for "$f" "$base"; then
       CERT_MAP["$base"]="$f|$k"; CERT_SRC["$base"]="脚本自签"
     fi
@@ -982,6 +993,13 @@ for f in sorted(glob.glob(os.path.join(os.environ["SB_NODES"], "*.json"))):
         pass
 subdir = os.environ["SUBDIR"]
 
+def cert_ss(n, sni):
+    # 按 SNI 域名找对应的证书状态；找不到则回退到节点级 selfsigned
+    for c in n.get("certs") or []:
+        if c.get("domain") == sni:
+            return bool(c.get("selfsigned"))
+    return bool(n.get("selfsigned"))
+
 def is_dom(h):
     import re
     if not h: return False
@@ -1026,13 +1044,13 @@ def gen_links(n):
             path = n["path"].replace("/", "%2F")
             links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&type=ws&path={path}&security=none#{name}")
         elif p == "tuic":
-            ins = "&allow_insecure=1" if n.get("selfsigned") else ""
+            ins = "&allow_insecure=1" if cert_ss(n, sni) else ""
             links.append(f"tuic://{n['uuid']}:{n['password']}@{h}:{port}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni={sni}{ins}#{name}")
         elif p == "hy2":
-            ins = "&insecure=1" if n.get("selfsigned") else ""
+            ins = "&insecure=1" if cert_ss(n, sni) else ""
             links.append(f"hysteria2://{n['password']}@{h}:{port}?sni={sni}{ins}#{name}")
         elif p == "anytls":
-            ins = "&insecure=1" if n.get("selfsigned") else ""
+            ins = "&insecure=1" if cert_ss(n, sni) else ""
             links.append(f"anytls://{n['password']}@{h}:{port}?sni={sni}{ins}#{name}")
     return links
 
@@ -1049,8 +1067,8 @@ L.append("proxies:")
 proxy_names = []
 for n in nodes:
     port, name, p = n["port"], n["name"], n["proto"]
-    skip = "true" if n.get("selfsigned") else "false"
     for h_raw, sni in link_hosts(n):
+        skip = "true" if cert_ss(n, sni) else "false"
         h = bare_host(h_raw)
         pname = name if h_raw == (n.get("link_v4") or "") else name + "-v6"
         if not n.get("link_v4") or not n.get("link_v6"):
@@ -1143,7 +1161,7 @@ for n in nodes:
                 "uuid": n["uuid"],
                 "transport": {"type": "ws", "path": n["path"], "headers": {"Host": sni}},
                 "tls": {"enabled": True, "server_name": sni,
-                    "insecure": bool(n.get("selfsigned"))}})
+                    "insecure": cert_ss(n, sni)}})
         elif p == "vless-ws":
             outbounds.append({"type": "vless", "tag": tag, "server": h, "server_port": port,
                 "uuid": n["uuid"], "transport": {"type": "ws", "path": n["path"]}})
@@ -1152,17 +1170,17 @@ for n in nodes:
                 "uuid": n["uuid"], "password": n["password"],
                 "congestion_control": "bbr", "udp_relay_mode": "native",
                 "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"],
-                    "insecure": bool(n.get("selfsigned"))}})
+                    "insecure": cert_ss(n, sni)}})
         elif p == "hy2":
             outbounds.append({"type": "hysteria2", "tag": tag, "server": h, "server_port": port,
                 "password": n["password"],
                 "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"],
-                    "insecure": bool(n.get("selfsigned"))}})
+                    "insecure": cert_ss(n, sni)}})
         elif p == "anytls":
             outbounds.append({"type": "anytls", "tag": tag, "server": h, "server_port": port,
                 "password": n["password"],
                 "tls": {"enabled": True, "server_name": sni,
-                    "insecure": bool(n.get("selfsigned"))}})
+                    "insecure": cert_ss(n, sni)}})
 with open(os.path.join(subdir, "singbox.json"), "w") as f:
     json.dump({"outbounds": outbounds}, f, indent=2, ensure_ascii=False)
 print(f"订阅已生成：{len(nodes)} 个节点")
@@ -1285,6 +1303,12 @@ def is_dom(h):
 def sni_of(h, default):
     return h if is_dom(h) else default
 
+def cert_ss(n, sni):
+    for c in n.get("certs") or []:
+        if c.get("domain") == sni:
+            return bool(c.get("selfsigned"))
+    return bool(n.get("selfsigned"))
+
 links = []
 hosts = []
 for key in ("link_v4", "link_v6"):
@@ -1306,13 +1330,13 @@ for h in hosts:
         path = n["path"].replace("/", "%2F")
         links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&type=ws&path={path}&security=none#{name}{suffix}")
     elif q == "tuic":
-        ins = "&allow_insecure=1" if n.get("selfsigned") else ""
+        ins = "&allow_insecure=1" if cert_ss(n, sni) else ""
         links.append(f"tuic://{n['uuid']}:{n['password']}@{h}:{port}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni={sni}{ins}#{name}{suffix}")
     elif q == "hy2":
-        ins = "&insecure=1" if n.get("selfsigned") else ""
+        ins = "&insecure=1" if cert_ss(n, sni) else ""
         links.append(f"hysteria2://{n['password']}@{h}:{port}?sni={sni}{ins}#{name}{suffix}")
     elif q == "anytls":
-        ins = "&insecure=1" if n.get("selfsigned") else ""
+        ins = "&insecure=1" if cert_ss(n, sni) else ""
         links.append(f"anytls://{n['password']}@{h}:{port}?sni={sni}{ins}#{name}{suffix}")
 n["links"] = links
 n["hosts"] = hosts

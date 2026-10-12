@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.0.0"
+SCRIPT_VER="2.0.1"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -35,6 +35,13 @@ info() { echo -e "$(_cyan "[*]") $*"; }
 ok()   { echo -e "$(_green "[✓]") $*"; }
 warn() { echo -e "$(_yellow "[!]") $*"; }
 err()  { echo -e "$(_red "[✗]") $*"; }
+
+# 读取菜单选择，清洗不可见字符和首尾空格
+read_choice() {
+  local input
+  read -rp "$1" input
+  echo "$input" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
 
 # ---------- 基础 ----------
 check_root() {
@@ -1042,7 +1049,7 @@ pick_node() {
     n=$(python3 -c "import json;print(json.load(open('$SB_NODES/$t.json')).get('name',''))" 2>/dev/null)
     echo "  $((i++)). $t ($n)"
   done
-  read -rp "选择 (序号): " n
+  n=$(read_choice "选择 (序号): ")
   t=${tags[$((n-1))]:-}
   [ -z "$t" ] && { warn "无效序号"; return 1; }
   echo "$t"
@@ -1104,7 +1111,7 @@ modify_node() {
   echo "  3) 密码"
   echo "  4) 备注名"
   echo "  5) 域名/sni"
-  read -rp "选择: " field
+  field=$(read_choice "选择: ")
   cp "$SB_CONF" "$SB_CONF.bak"
   case "$field" in
     1)
@@ -1222,7 +1229,7 @@ cert_menu() {
     echo "  2. 添加证书（域名+路径）"
     echo "  3. 删除证书"
     echo "  0. 返回"
-    read -rp "选择: " n
+    n=$(read_choice "选择: ")
     case "$n" in
       1)
         detect_certs
@@ -1334,7 +1341,7 @@ bbr_menu() {
     echo "  1. 开启 BBR（主线内核可用）"
     echo "  2. 开启 BBRv3（需 XanMod 内核）"
     echo "  0. 返回"
-    read -rp "选择: " n
+    n=$(read_choice "选择: ")
     case "$n" in
       1) enable_bbr ;;
       2)
@@ -1355,9 +1362,9 @@ update_singbox() {
   arch=$(detect_arch)
   [ -x "$SB_BIN" ] || { warn "尚未安装，先安装"; install_singbox; return; }
   ver=$(latest_version)
-  cur=$("$SB_BIN" version 2>/dev/null | grep -o "v[0-9.]*" | head -1)
-  info "当前: ${cur:-未知}  最新: $ver"
-  [ "$cur" = "$ver" ] && { ok "已是最新"; return; }
+  cur=$("$SB_BIN" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  info "当前: v${cur:-未知}  最新: $ver"
+  [ "v$cur" = "$ver" ] && { ok "已是最新"; return; }
   url="https://github.com/SagerNet/sing-box/releases/download/${ver}/sing-box-${ver#v}-linux-${arch}.tar.gz"
   tmp=$(mktemp -d)
   curl -L --progress-bar -o "$tmp/sb.tar.gz" "$url" || { err "下载失败"; rm -rf "$tmp"; return 1; }
@@ -1413,7 +1420,7 @@ add_node_menu() {
     echo "  5. Hysteria2"
     echo "  6. AnyTLS"
     echo "  0. 返回"
-    read -rp "选择 (可多选，如 1 4 5，空格分隔): " input
+    input=$(read_choice "选择 (可多选，如 1 4 5，空格分隔): ")
     [ "${input:-}" = "0" ] && return
     # 解析多选，去重，忽略无效项
     local sel nums=()
@@ -1454,7 +1461,7 @@ sub_menu() {
     echo "  2. 停止订阅服务"
     echo "  3. 重建订阅文件"
     echo "  0. 返回"
-    read -rp "选择: " n
+    n=$(read_choice "选择: ")
     case "$n" in
       1) sub_server_start ;;
       2) sub_server_stop ;;
@@ -1486,7 +1493,7 @@ main_menu() {
     echo " 10. 脚本自更新"
     echo " 11. 卸载"
     echo "  0. 退出"
-    read -rp "选择: " n
+    n=$(read_choice "选择: ")
     case "$n" in
       1) add_node_menu ;;
       2) modify_node ;;

@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.1.1"
+SCRIPT_VER="2.1.2"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -98,7 +98,7 @@ random_port() {
     port_in_use "$p" || { echo "$p"; return 0; }
     tries=$((tries + 1))
   done
-  err "随机端口 20 次都没挑到空闲的，手动指定吧"
+  err "随机端口 20 次都没挑到空闲的，手动指定吧" >&2
   return 1
 }
 
@@ -111,19 +111,19 @@ ask_domain() {
 }
 
 ask_port() {
-  # $1: 用途描述。回车=随机
+  # $1: 用途描述。回车=随机。注意：内部提示必须走 stderr，避免被 $() 捕获
   local input p
   while :; do
     read -rp "端口 [回车=随机]: " input
     if [ -z "$input" ]; then
       p=$(random_port) || continue
-      info "随机端口: $p"
+      info "随机端口: $p" >&2
       echo "$p"; return 0
     fi
     if ! [[ "$input" =~ ^[0-9]+$ ]] || [ "$input" -lt 1 ] || [ "$input" -gt 65535 ]; then
-      warn "端口不合法"; continue
+      warn "端口不合法" >&2; continue
     fi
-    if port_in_use "$input"; then warn "端口 $input 已被占用"; continue; fi
+    if port_in_use "$input"; then warn "端口 $input 已被占用" >&2; continue; fi
     echo "$input"; return 0
   done
 }

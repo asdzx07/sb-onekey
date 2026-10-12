@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.1.4"
+SCRIPT_VER="2.1.5"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -505,21 +505,45 @@ quiet_link_addrs() {
   [ -z "$LINK_V4" ] && [ -z "$LINK_V6" ] && { err "无法获取公网地址"; return 1; }
 }
 
-# 为 LINK_V4/LINK_V6 中的域名解析证书
-# → 填充 CERT_DOMAINS/CERT_PATHS/CERT_KEYS/CERT_SELF 数组
+# 证书是否覆盖某域名（SAN / 通配符 / CN）
+# $1: 证书路径 $2: 域名 → 0=覆盖
+cert_covers_domain() {
+  local cert="$1" domain="$2" san parent
+  san=$(openssl x509 -noout -in "$cert" -ext subjectAltName 2>/dev/null)
+  echo "$san" | grep -q "DNS:${domain}" && return 0
+  parent="${domain#*.}"
+  [ "$parent" != "$domain" ] && echo "$san" | grep -q "DNS:\*.${parent}" && return 0
+  openssl x509 -noout -in "$cert" -subject 2>/dev/null | grep -qE "CN *= *${domain}([, /]|$)" && return 0
+  return 1
+}
+
+# 为 LINK_V4/LINK_V6 解析证书（单入站只支持一张证书）
+# → 填充 CERT_DOMAINS/CERT_PATHS/CERT_KEYS/CERT_SELF（单元素数组）
+# 注意：sing-box 的 certificate/key 数组是「单张 PEM 的分行」，不是多证书！
+# 传多张 PEM 会被 join 成一张，SNI 选择根本不会生效。v2.1.0 的多证书设计是错的。
 resolve_link_certs() {
   CERT_DOMAINS=(); CERT_PATHS=(); CERT_KEYS=(); CERT_SELF=()
-  local d c k seen=""
+  local d c k primary=""
   for d in "$LINK_V4" "$LINK_V6"; do
     [ -z "$d" ] && continue
     is_domain "$d" || continue
-    [[ "$seen" == *"|$d|"* ]] && continue
-    seen+="|$d|"
-    info "解析 [$d] 的证书..."
-    read -r c k d <<< "$(resolve_cert "$d")" || return 1
-    CERT_DOMAINS+=("$d"); CERT_PATHS+=("$c"); CERT_KEYS+=("$k")
-    if is_self_signed "$c"; then CERT_SELF+=(1); else CERT_SELF+=(0); fi
+    [ -z "$primary" ] && primary="$d"
   done
+  if [ -z "$primary" ]; then fallback_cert_domain; return $?; fi
+  info "解析证书（单入站只支持一张证书）..."
+  read -r c k primary <<< "$(resolve_cert "$primary")" || return 1
+  CERT_DOMAINS=("$primary"); CERT_PATHS=("$c"); CERT_KEYS=("$k")
+  if is_self_signed "$c"; then CERT_SELF=(1); else CERT_SELF=(0); fi
+  # 证书覆盖校验：不覆盖的链接域名，SNI 回退到证书域名
+  for d in "$LINK_V4" "$LINK_V6"; do
+    [ -z "$d" ] && continue
+    is_domain "$d" || continue
+    if ! cert_covers_domain "$c" "$d"; then
+      warn "证书 [$primary] 不覆盖 [$d]，该链接 SNI 将使用 [$primary]"
+      warn "如需 SNI 与链接域名一致，请申请一张同时覆盖两个域名的证书"
+    fi
+  done
+  SNI_V4=$(sni_for "$LINK_V4"); SNI_V6=$(sni_for "$LINK_V6")
   return 0
 }
 
@@ -531,36 +555,27 @@ fallback_cert_domain() {
   read -r c k domain <<< "$(resolve_cert "$domain")" || return 1
   CERT_DOMAINS=("$domain"); CERT_PATHS=("$c"); CERT_KEYS=("$k")
   if is_self_signed "$c"; then CERT_SELF=(1); else CERT_SELF=(0); fi
+  SNI_V4=$(sni_for "$LINK_V4"); SNI_V6=$(sni_for "$LINK_V6")
 }
 
 # 生成 tls 的证书部分 JSON → TLS_CERT_JSON
 # $1: 额外字段（如 '"alpn":["h3"],'）
-# 单证书用 certificate_path；多证书内嵌 PEM 内容（sing-box 的 certificate 是 []string）
+# 只用单证书（certificate_path/key_path）。不要传多张 PEM，sing-box 会 join 成一张。
 build_tls_cert_json() {
-  local extra="${1:-}" n=${#CERT_DOMAINS[@]}
-  if [ $n -eq 0 ]; then err "没有可用证书"; return 1; fi
-  if [ $n -eq 1 ]; then
-    TLS_CERT_JSON="\"certificate_path\":\"${CERT_PATHS[0]}\",\"key_path\":\"${CERT_KEYS[0]}\""
-  else
-    local certs_json keys_json
-    certs_json=$(python3 -c "
-import json
-paths = '''${CERT_PATHS[*]}'''.split()
-print(json.dumps([open(p).read() for p in paths]))")
-    keys_json=$(python3 -c "
-import json
-paths = '''${CERT_KEYS[*]}'''.split()
-print(json.dumps([open(p).read() for p in paths]))")
-    TLS_CERT_JSON="\"certificate\":$certs_json,\"key\":$keys_json"
-  fi
+  local extra="${1:-}"
+  [ ${#CERT_DOMAINS[@]} -eq 0 ] && { err "没有可用证书"; return 1; }
+  TLS_CERT_JSON="\"certificate_path\":\"${CERT_PATHS[0]}\",\"key_path\":\"${CERT_KEYS[0]}\""
   TLS_CERT_JSON="\"enabled\":true,\"server_name\":\"${CERT_DOMAINS[0]}\",${extra}${TLS_CERT_JSON}"
 }
 
-# 链接的 sni：域名用自身，IP 用主证书域名
+# 链接的 sni：证书覆盖链接域名则用链接域名，否则用证书域名（单证书无 SNI 选择）
 # $1: link host
 sni_for() {
-  if is_domain "$1"; then echo "$1"
-  else echo "${CERT_DOMAINS[0]:-bing.com}"; fi
+  if is_domain "$1" && [ ${#CERT_PATHS[@]} -gt 0 ] && cert_covers_domain "${CERT_PATHS[0]}" "$1"; then
+    echo "$1"
+  else
+    echo "${CERT_DOMAINS[0]:-bing.com}"
+  fi
 }
 
 # 链接的 insecure 参数：$1: link host $2: 参数名（allow_insecure/insecure）
@@ -648,7 +663,7 @@ EOF
 {"tag":"$tag","proto":"vless-reality","name":"REALITY-${port}","port":$port,
  "uuid":"$uuid","password":null,"domain":"$domain","path":null,
  "pubkey":"$pub","shortid":"$shortid","cert":null,"key":null,"selfsigned":false,
- "link_v4":"$LINK_V4","link_v6":"$LINK_V6","hosts":$hosts_json,
+ "link_v4":"$LINK_V4","link_v6":"$LINK_V6","sni_v4":"$SNI_V4","sni_v6":"$SNI_V6","hosts":$hosts_json,
  "created":"$(date '+%F %T')"}
 EOF
 )
@@ -715,7 +730,7 @@ add_ws_tls() {
 {"tag":"$tag","proto":"vless-ws-tls","name":"WS-TLS-${port}","port":$port,
  "uuid":"$uuid","password":null,"domain":"${CERT_DOMAINS[0]}","path":"$path",
  "pubkey":null,"shortid":null,"certs":$CERTS_JSON,"selfsigned":$META_SELFSIGNED,
- "link_v4":"$LINK_V4","link_v6":"$LINK_V6","hosts":$hosts_json,
+ "link_v4":"$LINK_V4","link_v6":"$LINK_V6","sni_v4":"$SNI_V4","sni_v6":"$SNI_V6","hosts":$hosts_json,
  "created":"$(date '+%F %T')"}
 EOF
 )
@@ -758,7 +773,7 @@ EOF
 {"tag":"$tag","proto":"vless-ws","name":"WS-${port}","port":$port,
  "uuid":"$uuid","password":null,"domain":null,"path":"$path",
  "pubkey":null,"shortid":null,"cert":null,"key":null,"selfsigned":false,
- "link_v4":"$LINK_V4","link_v6":"$LINK_V6","hosts":$hosts_json,
+ "link_v4":"$LINK_V4","link_v6":"$LINK_V6","sni_v4":"$SNI_V4","sni_v6":"$SNI_V6","hosts":$hosts_json,
  "created":"$(date '+%F %T')"}
 EOF
 )
@@ -818,7 +833,7 @@ add_tuic() {
 {"tag":"$tag","proto":"tuic","name":"TUIC-${port}","port":$port,
  "uuid":"$uuid","password":"$passwd","domain":"${CERT_DOMAINS[0]}","path":null,
  "pubkey":null,"shortid":null,"certs":$CERTS_JSON,"selfsigned":$META_SELFSIGNED,
- "link_v4":"$LINK_V4","link_v6":"$LINK_V6","hosts":$hosts_json,
+ "link_v4":"$LINK_V4","link_v6":"$LINK_V6","sni_v4":"$SNI_V4","sni_v6":"$SNI_V6","hosts":$hosts_json,
  "created":"$(date '+%F %T')"}
 EOF
 )
@@ -878,7 +893,7 @@ add_hy2() {
 {"tag":"$tag","proto":"hy2","name":"HY2-${port}","port":$port,
  "uuid":null,"password":"$passwd","domain":"${CERT_DOMAINS[0]}","path":null,
  "pubkey":null,"shortid":null,"certs":$CERTS_JSON,"selfsigned":$META_SELFSIGNED,
- "link_v4":"$LINK_V4","link_v6":"$LINK_V6","hosts":$hosts_json,
+ "link_v4":"$LINK_V4","link_v6":"$LINK_V6","sni_v4":"$SNI_V4","sni_v6":"$SNI_V6","hosts":$hosts_json,
  "created":"$(date '+%F %T')"}
 EOF
 )
@@ -938,7 +953,7 @@ add_anytls() {
 {"tag":"$tag","proto":"anytls","name":"AnyTLS-${port}","port":$port,
  "uuid":null,"password":"$passwd","domain":"${CERT_DOMAINS[0]}","path":null,
  "pubkey":null,"shortid":null,"certs":$CERTS_JSON,"selfsigned":$META_SELFSIGNED,
- "link_v4":"$LINK_V4","link_v6":"$LINK_V6","hosts":$hosts_json,
+ "link_v4":"$LINK_V4","link_v6":"$LINK_V6","sni_v4":"$SNI_V4","sni_v6":"$SNI_V6","hosts":$hosts_json,
  "created":"$(date '+%F %T')"}
 EOF
 )
@@ -1015,13 +1030,13 @@ def sni_of(h, default):
     return h if is_dom(h) else default
 
 def link_hosts(n):
-    # 返回 [(host, sni)] 列表
+    # 返回 [(host, sni)] 列表；优先用创建时按证书覆盖算好的 sni_v4/sni_v6
     out = []
     default_sni = n.get("domain") or "bing.com"
-    for key in ("link_v4", "link_v6"):
+    for key, skey in (("link_v4", "sni_v4"), ("link_v6", "sni_v6")):
         h = n.get(key)
         if h:
-            out.append((h, sni_of(h, default_sni)))
+            out.append((h, n.get(skey) or sni_of(h, default_sni)))
     if not out:
         for h in n.get("hosts", []):
             out.append((h, sni_of(h, default_sni)))
@@ -1311,15 +1326,15 @@ def cert_ss(n, sni):
 
 links = []
 hosts = []
-for key in ("link_v4", "link_v6"):
+for key, skey in (("link_v4", "sni_v4"), ("link_v6", "sni_v6")):
     h = n.get(key)
-    if h: hosts.append(h)
+    if h: hosts.append((h, n.get(skey)))
 if not hosts:
-    hosts = n.get("hosts", [])
+    hosts = [(h, None) for h in n.get("hosts", [])]
 default_sni = n.get("domain") or "bing.com"
 port, name, q = n["port"], n["name"], n["proto"]
-for h in hosts:
-    sni = sni_of(h, default_sni)
+for h, sni_stored in hosts:
+    sni = sni_stored or sni_of(h, default_sni)
     suffix = "-v6" if h == n.get("link_v6") and n.get("link_v4") else ""
     if q == "vless-reality":
         links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni={sni}&fp=chrome&pbk={n['pubkey']}&sid={n['shortid']}&type=tcp#{name}{suffix}")

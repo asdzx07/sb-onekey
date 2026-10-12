@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.1.5"
+SCRIPT_VER="2.1.6"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -147,11 +147,14 @@ declare -A CERT_SRC  # 域名 -> 来源说明
 cert_valid_for() {
   local cert="$1" domain="$2"
   openssl x509 -checkend 0 -noout -in "$cert" 2>/dev/null || return 1
-  if openssl x509 -noout -in "$cert" -ext subjectAltName 2>/dev/null | grep -q "DNS:${domain}"; then
-    return 0
-  fi
-  openssl x509 -noout -in "$cert" -subject 2>/dev/null | grep -qE "CN *= *${domain}" && return 0
+  cert_covers_domain "$cert" "$domain" && return 0
   return 1
+}
+
+# 证书覆盖的所有 DNS 域名（SAN，去掉通配符的 *），每行一个
+cert_all_domains() {
+  openssl x509 -noout -in "$1" -ext subjectAltName 2>/dev/null \
+    | grep -o "DNS:[^,]*" | cut -d: -f2 | sed 's/^\*\.//' | sort -u
 }
 
 cert_expiry() {
@@ -178,13 +181,16 @@ detect_certs() {
     fi
   done
   # 用户手动放证书的常见目录：/root/cert/<域名>/fullchain.pem + privkey.pem
+  # SAN 证书会按其覆盖的所有域名分别注册
   for d in /root/cert/*/; do
     [ -d "$d" ] || continue
-    domain=$(basename "$d"); [[ "$domain" == .* ]] && continue
     c="${d}fullchain.pem"; k="${d}privkey.pem"
-    if [ -f "$c" ] && [ -f "$k" ] && cert_valid_for "$c" "$domain"; then
+    [ -f "$c" ] && [ -f "$k" ] || continue
+    openssl x509 -checkend 0 -noout -in "$c" 2>/dev/null || continue
+    for domain in $(cert_all_domains "$c"); do
+      [ -n "${CERT_MAP[$domain]:-}" ] && continue
       CERT_MAP["$domain"]="$c|$k"; CERT_SRC["$domain"]="/root/cert 自动检测"
-    fi
+    done
   done
   for f in "$SB_CERTS"/*.crt; do
     [ -f "$f" ] || continue

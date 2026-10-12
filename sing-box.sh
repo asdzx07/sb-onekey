@@ -1230,6 +1230,7 @@ cert_menu() {
     echo "  3. 删除证书"
     echo "  0. 返回"
     n=$(read_choice "选择: ")
+    [ -z "$n" ] && return
     case "$n" in
       1)
         detect_certs

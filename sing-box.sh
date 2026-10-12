@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.0.2"
+SCRIPT_VER="2.1.0"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -138,15 +138,6 @@ ask_password() {
   local input
   read -rp "密码 [回车=随机生成]: " input
   echo "${input:-$(openssl rand -hex 12)}"
-}
-
-ask_addr_mode() {
-  # 链接地址模式：1=v4 2=v6 3=都要
-  local input
-  read -rp "客户端链接地址 [1]IPv4 [2]IPv6 [3]都要 (回车=3): " input
-  case "${input:-3}" in
-    1) echo 1 ;; 2) echo 2 ;; *) echo 3 ;;
-  esac
 }
 
 # ---------- 证书自动检测 ----------
@@ -461,18 +452,110 @@ is_self_signed() {
   [ -n "$iss" ] && [ "$iss" = "$sub" ]
 }
 
-# 收集客户端链接用的地址列表。$1: addr_mode(1=v4 2=v6 3=都要) → 设置 HOSTS 数组
-collect_hosts() {
-  HOSTS=()
-  local h4 h6
-  h4=$(get_public_ip "$QUIET" 2>/dev/null)
+# 判断是否为域名（非 IP）。是域名返回0
+is_domain() {
+  local s="$1"
+  [[ "$s" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && return 1
+  [[ "$s" =~ ^\[.*\]$ ]] && return 1
+  [[ "$s" == *:* ]] && return 1
+  [ -n "$s" ] && return 0
+  return 1
+}
+
+# 询问 v4/v6 链接地址 → 设置 LINK_V4 / LINK_V6（域名或IP，空=不用）
+ask_link_addrs() {
+  local h4 h6 d4 d6
+  h4=$(get_public_ip 0 2>/dev/null)
   h6=$(get_public_ip6 2>/dev/null)
-  case "${1:-3}" in
-    1) [ -n "$h4" ] && HOSTS+=("$h4") ;;
-    2) [ -n "$h6" ] && HOSTS+=("[$h6]") ;;
-    *) [ -n "$h4" ] && HOSTS+=("$h4"); [ -n "$h6" ] && HOSTS+=("[$h6]") ;;
-  esac
-  if [ ${#HOSTS[@]} -eq 0 ]; then err "没有可用的公网地址"; return 1; fi
+  read -rp "IPv4 链接地址 [输入域名，回车=用IP${h4:+ $h4}]: " d4
+  d4=$(echo "$d4" | tr -d '\r' | xargs)
+  if [ -n "$d4" ]; then LINK_V4="$d4"
+  elif [ -n "$h4" ]; then LINK_V4="$h4"
+  else LINK_V4=""; fi
+
+  read -rp "IPv6 链接地址 [输入域名，回车=用IP${h6:+ [$h6]}，无则跳过]: " d6
+  d6=$(echo "$d6" | tr -d '\r' | xargs)
+  if [ -n "$d6" ]; then LINK_V6="$d6"
+  elif [ -n "$h6" ]; then LINK_V6="[$h6]"
+  else LINK_V6=""; fi
+
+  if [ -z "$LINK_V4" ] && [ -z "$LINK_V6" ]; then
+    err "至少需要一个链接地址"; return 1
+  fi
+}
+
+# QUIET 模式的链接地址（IP，双栈）
+quiet_link_addrs() {
+  local h4 h6
+  h4=$(get_public_ip 1 2>/dev/null)
+  h6=$(get_public_ip6 2>/dev/null)
+  LINK_V4="${h4:-}"; LINK_V6=""
+  [ -n "$h6" ] && LINK_V6="[$h6]"
+  [ -z "$LINK_V4" ] && [ -z "$LINK_V6" ] && { err "无法获取公网地址"; return 1; }
+}
+
+# 为 LINK_V4/LINK_V6 中的域名解析证书
+# → 填充 CERT_DOMAINS/CERT_PATHS/CERT_KEYS/CERT_SELF 数组
+resolve_link_certs() {
+  CERT_DOMAINS=(); CERT_PATHS=(); CERT_KEYS=(); CERT_SELF=()
+  local d c k seen=""
+  for d in "$LINK_V4" "$LINK_V6"; do
+    [ -z "$d" ] && continue
+    is_domain "$d" || continue
+    [[ "$seen" == *"|$d|"* ]] && continue
+    seen+="|$d|"
+    info "解析 [$d] 的证书..."
+    read -r c k d <<< "$(resolve_cert "$d")" || return 1
+    CERT_DOMAINS+=("$d"); CERT_PATHS+=("$c"); CERT_KEYS+=("$k")
+    if is_self_signed "$c"; then CERT_SELF+=(1); else CERT_SELF+=(0); fi
+  done
+  return 0
+}
+
+# 无域名时的兜底：问一个证书域名（默认 bing.com 自签）
+fallback_cert_domain() {
+  local domain c k
+  show_detected_certs
+  domain=$(ask_domain "bing.com")
+  read -r c k domain <<< "$(resolve_cert "$domain")" || return 1
+  CERT_DOMAINS=("$domain"); CERT_PATHS=("$c"); CERT_KEYS=("$k")
+  if is_self_signed "$c"; then CERT_SELF=(1); else CERT_SELF=(0); fi
+}
+
+# 生成 tls 的证书部分 JSON → TLS_CERT_JSON
+# $1: 额外字段（如 '"alpn":["h3"],'）
+build_tls_cert_json() {
+  local extra="${1:-}" n=${#CERT_DOMAINS[@]} arr="" i
+  if [ $n -eq 0 ]; then err "没有可用证书"; return 1; fi
+  if [ $n -eq 1 ]; then
+    TLS_CERT_JSON="\"certificate_path\":\"${CERT_PATHS[0]}\",\"key_path\":\"${CERT_KEYS[0]}\""
+  else
+    for ((i=0; i<n; i++)); do
+      [ -n "$arr" ] && arr+=","
+      arr+="{\"certificate_path\":\"${CERT_PATHS[i]}\",\"key_path\":\"${CERT_KEYS[i]}\"}"
+    done
+    TLS_CERT_JSON="\"certificate\":[$arr]"
+  fi
+  TLS_CERT_JSON="\"enabled\":true,\"server_name\":\"${CERT_DOMAINS[0]}\",${extra}${TLS_CERT_JSON}"
+}
+
+# 链接的 sni：域名用自身，IP 用主证书域名
+# $1: link host
+sni_for() {
+  if is_domain "$1"; then echo "$1"
+  else echo "${CERT_DOMAINS[0]:-bing.com}"; fi
+}
+
+# 链接的 insecure 参数：$1: link host $2: 参数名（allow_insecure/insecure）
+insecure_for() {
+  local h="$1" param="$2" d i
+  d=$(sni_for "$h")
+  for ((i=0; i<${#CERT_DOMAINS[@]}; i++)); do
+    if [ "${CERT_DOMAINS[i]}" = "$d" ] && [ "${CERT_SELF[i]}" = "1" ]; then
+      echo "&${param}=1"; return 0
+    fi
+  done
+  echo ""
 }
 
 show_links() {
@@ -507,13 +590,14 @@ print(json.dumps(m, ensure_ascii=False))")
 # ---------- 1. VLESS + REALITY ----------
 add_reality() {
   local port="${1:-}" domain="${2:-}"
-  local uuid keypair priv pub shortid tag host mode links=() h
+  local uuid keypair priv pub shortid tag links=()
   info "添加 VLESS + REALITY"
   if [ "$QUIET" = "1" ]; then
     [ -z "$port" ] && { port=443; port_in_use "$port" && port=$(random_port); }
     ensure_port_free "$port" || return 1
     [ -z "$domain" ] && domain=${REALITY_DOMAINS[$((RANDOM % ${#REALITY_DOMAINS[@]}))]}
-    uuid=$("$SB_BIN" generate uuid); mode=3
+    uuid=$("$SB_BIN" generate uuid)
+    quiet_link_addrs || return 1
   else
     if [ -n "$port" ]; then ensure_port_free "$port" || return 1
     else port=$(ask_port "REALITY"); fi
@@ -521,14 +605,14 @@ add_reality() {
       domain=${REALITY_DOMAINS[$((RANDOM % ${#REALITY_DOMAINS[@]}))]}
       info "随机伪装域名: $domain (如需指定下次用 --domain)"
     fi
-    uuid=$(ask_uuid); mode=$(ask_addr_mode)
+    uuid=$(ask_uuid)
+    ask_link_addrs || return 1
   fi
   keypair=$("$SB_BIN" generate reality-keypair)
   priv=$(echo "$keypair" | grep -i private | awk '{print $NF}')
   pub=$(echo "$keypair" | grep -i public | awk '{print $NF}')
   shortid=$(openssl rand -hex 8)
   tag="reality-${port}"
-  collect_hosts "$mode" || return 1
 
   PENDING_INBOUND=$(cat <<EOF
 {"type":"vless","tag":"$tag","listen":"::","listen_port":$port,
@@ -538,15 +622,16 @@ add_reality() {
    "private_key":"$priv","short_id":["$shortid"]}}}
 EOF
 )
-  for h in "${HOSTS[@]}"; do
-    links+=("vless://${uuid}@${h}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${domain}&fp=chrome&pbk=${pub}&sid=${shortid}&type=tcp#REALITY-${port}")
-  done
-  local meta
+  local base="vless://${uuid}@%s:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${domain}&fp=chrome&pbk=${pub}&sid=${shortid}&type=tcp"
+  [ -n "$LINK_V4" ] && links+=("$(printf "$base#REALITY-${port}" "$LINK_V4")")
+  [ -n "$LINK_V6" ] && links+=("$(printf "$base#REALITY-${port}-v6" "$LINK_V6")")
+  local meta hosts_json
+  hosts_json=$(python3 -c "import json;print(json.dumps([x for x in ['$LINK_V4','$LINK_V6'] if x]))")
   meta=$(cat <<EOF
 {"tag":"$tag","proto":"vless-reality","name":"REALITY-${port}","port":$port,
  "uuid":"$uuid","password":null,"domain":"$domain","path":null,
  "pubkey":"$pub","shortid":"$shortid","cert":null,"key":null,"selfsigned":false,
- "hosts":$(printf '%s\n' "${HOSTS[@]}" | python3 -c "import json,sys;print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))"),
+ "link_v4":"$LINK_V4","link_v6":"$LINK_V6","hosts":$hosts_json,
  "created":"$(date '+%F %T')"}
 EOF
 )
@@ -554,71 +639,91 @@ EOF
 }
 
 # ---------- 2. VLESS + WS + TLS ----------
+# ---------- 2. VLESS + WS + TLS ----------
 add_ws_tls() {
   local port="${1:-}" domain="${2:-}" cert="${3:-}" key="${4:-}"
-  local uuid path tag mode links=() h c k
+  local uuid path tag links=()
   info "添加 VLESS + WS + TLS"
   if [ "$QUIET" = "1" ]; then
     [ -z "$port" ] && { port=443; port_in_use "$port" && port=$(random_port); }
     ensure_port_free "$port" || return 1
     [ -z "$domain" ] && { err "CLI 模式需要 --domain"; return 1; }
     [ -z "$cert" ] || [ -z "$key" ] && { err "CLI 模式需要 --cert 和 --key"; return 1; }
-    uuid=$("$SB_BIN" generate uuid); mode=3; c="$cert"; k="$key"
+    uuid=$("$SB_BIN" generate uuid)
+    quiet_link_addrs || return 1
+    CERT_DOMAINS=("$domain"); CERT_PATHS=("$cert"); CERT_KEYS=("$key")
+    if is_self_signed "$cert"; then CERT_SELF=(1); else CERT_SELF=(0); fi
   else
     if [ -n "$port" ]; then ensure_port_free "$port" || return 1
     else port=$(ask_port "VLESS/WS/TLS"); fi
-    show_detected_certs
-    [ -z "$domain" ] && domain=$(ask_domain "")
-    [ -z "$domain" ] && { err "域名不能为空"; return 1; }
-    if [ -z "$cert" ]; then
-      read -r c k domain <<< "$(resolve_cert "$domain")" || return 1
-    else c="$cert"; k="$key"; fi
-    uuid=$(ask_uuid); mode=$(ask_addr_mode)
+    if [ -n "$domain" ] && [ -n "$cert" ]; then
+      CERT_DOMAINS=("$domain"); CERT_PATHS=("$cert"); CERT_KEYS=("$key")
+      if is_self_signed "$cert"; then CERT_SELF=(1); else CERT_SELF=(0); fi
+    else
+      show_detected_certs
+      ask_link_addrs || return 1
+      resolve_link_certs || return 1
+      if [ ${#CERT_DOMAINS[@]} -eq 0 ]; then
+        fallback_cert_domain || return 1
+      fi
+    fi
+    uuid=$(ask_uuid)
   fi
+  # CLI 指定了 domain 但没走 ask_link_addrs 时补上
+  [ -z "${LINK_V4:-}" ] && [ -z "${LINK_V6:-}" ] && { quiet_link_addrs || return 1; }
   path="/$(openssl rand -hex 6)"
   tag="ws-tls-${port}"
-  collect_hosts "$mode" || return 1
+  build_tls_cert_json || return 1
 
-  PENDING_INBOUND=$(cat <<EOF
-{"type":"vless","tag":"$tag","listen":"::","listen_port":$port,
- "users":[{"uuid":"$uuid"}],
- "transport":{"type":"ws","path":"$path"},
- "tls":{"enabled":true,"server_name":"$domain","certificate_path":"$c","key_path":"$k"}}
-EOF
-)
+  PENDING_INBOUND="{\"type\":\"vless\",\"tag\":\"$tag\",\"listen\":\"::\",\"listen_port\":$port,"
+  PENDING_INBOUND+="\"users\":[{\"uuid\":\"$uuid\"}],"
+  PENDING_INBOUND+="\"transport\":{\"type\":\"ws\",\"path\":\"$path\"},"
+  PENDING_INBOUND+="\"tls\":{$TLS_CERT_JSON}}"
+
   local enc_path=${path//\//%2F}
-  for h in "${HOSTS[@]}"; do
-    links+=("vless://${uuid}@${h}:${port}?encryption=none&security=tls&sni=${domain}&type=ws&path=${enc_path}&host=${domain}#WS-TLS-${port}")
+  local h sni ins suffix base
+  for h in "$LINK_V4" "$LINK_V6"; do
+    [ -z "$h" ] && continue
+    sni=$(sni_for "$h")
+    ins=$(insecure_for "$h" "insecure")
+    suffix=""; { [ "$h" = "$LINK_V6" ] && [ -n "$LINK_V4" ]; } && suffix="-v6"
+    base="vless://${uuid}@%s:${port}?encryption=none&security=tls&sni=${sni}&type=ws&path=${enc_path}&host=${sni}${ins}"
+    links+=("$(printf "$base#WS-TLS-${port}${suffix}" "$h")")
   done
-  local meta
+
+  local meta hosts_json
+  build_certs_json
+  hosts_json=$(python3 -c "import json;print(json.dumps([x for x in ['$LINK_V4','$LINK_V6'] if x]))")
   meta=$(cat <<EOF
 {"tag":"$tag","proto":"vless-ws-tls","name":"WS-TLS-${port}","port":$port,
- "uuid":"$uuid","password":null,"domain":"$domain","path":"$path",
- "pubkey":null,"shortid":null,"cert":"$c","key":"$k","selfsigned":false,
- "hosts":$(printf '%s\n' "${HOSTS[@]}" | python3 -c "import json,sys;print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))"),
+ "uuid":"$uuid","password":null,"domain":"${CERT_DOMAINS[0]}","path":"$path",
+ "pubkey":null,"shortid":null,"certs":$CERTS_JSON,"selfsigned":$META_SELFSIGNED,
+ "link_v4":"$LINK_V4","link_v6":"$LINK_V6","hosts":$hosts_json,
  "created":"$(date '+%F %T')"}
 EOF
 )
   finish_add "$tag" "$meta" "VLESS+WS+TLS" "${links[@]}"
 }
 
+
 # ---------- 3. VLESS + WS (明文) ----------
 add_ws() {
   local port="${1:-}"
-  local uuid path tag mode links=() h
+  local uuid path tag links=()
   info "添加 VLESS + WS (明文无 TLS，一般配合 CDN/反代使用)"
   if [ "$QUIET" = "1" ]; then
     [ -z "$port" ] && port=$(random_port)
     ensure_port_free "$port" || return 1
-    uuid=$("$SB_BIN" generate uuid); mode=3
+    uuid=$("$SB_BIN" generate uuid)
+    quiet_link_addrs || return 1
   else
     if [ -n "$port" ]; then ensure_port_free "$port" || return 1
     else port=$(ask_port "VLESS/WS"); fi
-    uuid=$(ask_uuid); mode=$(ask_addr_mode)
+    uuid=$(ask_uuid)
+    ask_link_addrs || return 1
   fi
   path="/$(openssl rand -hex 6)"
   tag="ws-${port}"
-  collect_hosts "$mode" || return 1
 
   PENDING_INBOUND=$(cat <<EOF
 {"type":"vless","tag":"$tag","listen":"::","listen_port":$port,
@@ -627,15 +732,16 @@ add_ws() {
 EOF
 )
   local enc_path=${path//\//%2F}
-  for h in "${HOSTS[@]}"; do
-    links+=("vless://${uuid}@${h}:${port}?encryption=none&type=ws&path=${enc_path}&security=none#WS-${port}")
-  done
-  local meta
+  local base="vless://${uuid}@%s:${port}?encryption=none&type=ws&path=${enc_path}&security=none"
+  [ -n "$LINK_V4" ] && links+=("$(printf "$base#WS-${port}" "$LINK_V4")")
+  [ -n "$LINK_V6" ] && links+=("$(printf "$base#WS-${port}-v6" "$LINK_V6")")
+  local meta hosts_json
+  hosts_json=$(python3 -c "import json;print(json.dumps([x for x in ['$LINK_V4','$LINK_V6'] if x]))")
   meta=$(cat <<EOF
 {"tag":"$tag","proto":"vless-ws","name":"WS-${port}","port":$port,
  "uuid":"$uuid","password":null,"domain":null,"path":"$path",
  "pubkey":null,"shortid":null,"cert":null,"key":null,"selfsigned":false,
- "hosts":$(printf '%s\n' "${HOSTS[@]}" | python3 -c "import json,sys;print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))"),
+ "link_v4":"$LINK_V4","link_v6":"$LINK_V6","hosts":$hosts_json,
  "created":"$(date '+%F %T')"}
 EOF
 )
@@ -643,164 +749,196 @@ EOF
 }
 
 # ---------- 4. TUIC v5 ----------
+# ---------- 4. TUIC v5 ----------
 add_tuic() {
   local port="${1:-}"
-  local uuid passwd tag mode links=() h c k insecure domain
+  local uuid passwd tag links=()
   info "添加 TUIC v5"
   if [ "$QUIET" = "1" ]; then
     [ -z "$port" ] && port=$(random_port)
     ensure_port_free "$port" || return 1
-    domain="bing.com"; c=""; k=""
-    uuid=$("$SB_BIN" generate uuid); passwd=$(openssl rand -hex 12); mode=3
+    uuid=$("$SB_BIN" generate uuid); passwd=$(openssl rand -hex 12)
+    quiet_link_addrs || return 1
+    CERT_DOMAINS=("bing.com")
+    local c="$SB_CERTS/tuic-${port}.crt" k="$SB_CERTS/tuic-${port}.key"
+    mkdir -p "$SB_CERTS"
+    openssl req -x509 -newkey rsa:2048 -keyout "$k" -out "$c" -days 3650 -nodes \
+      -subj "/CN=bing.com" >/dev/null 2>&1
+    chmod 600 "$c" "$k"
+    CERT_PATHS=("$c"); CERT_KEYS=("$k"); CERT_SELF=(1)
   else
     if [ -n "$port" ]; then ensure_port_free "$port" || return 1
     else port=$(ask_port "TUIC"); fi
     show_detected_certs
-    domain=$(ask_domain "bing.com")
-    read -r c k domain <<< "$(resolve_cert "$domain")" || return 1
-    uuid=$(ask_uuid); passwd=$(ask_password); mode=$(ask_addr_mode)
+    ask_link_addrs || return 1
+    resolve_link_certs || return 1
+    if [ ${#CERT_DOMAINS[@]} -eq 0 ]; then
+      fallback_cert_domain || return 1
+    fi
+    uuid=$(ask_uuid); passwd=$(ask_password)
   fi
-  if [ -z "$c" ]; then
-    # QUIET 模式无证书时现场自签
-    c="$SB_CERTS/tuic-${port}.crt"; k="$SB_CERTS/tuic-${port}.key"
-    mkdir -p "$SB_CERTS"
-    openssl req -x509 -newkey rsa:2048 -keyout "$k" -out "$c" -days 3650 -nodes \
-      -subj "/CN=${domain}" >/dev/null 2>&1
-    chmod 600 "$c" "$k"
-  fi
-  is_self_signed "$c" && insecure="&allow_insecure=1" || insecure=""
-  [ -n "$insecure" ] && warn "自签证书：客户端需开启 allow_insecure"
   tag="tuic-${port}"
-  collect_hosts "$mode" || return 1
+  build_tls_cert_json '"alpn":["h3"],' || return 1
 
-  PENDING_INBOUND=$(cat <<EOF
-{"type":"tuic","tag":"$tag","listen":"::","listen_port":$port,
- "users":[{"uuid":"$uuid","password":"$passwd"}],
- "congestion_control":"bbr",
- "tls":{"enabled":true,"server_name":"$domain","alpn":["h3"],
-  "certificate_path":"$c","key_path":"$k"}}
-EOF
-)
-  for h in "${HOSTS[@]}"; do
-    links+=("tuic://${uuid}:${passwd}@${h}:${port}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=${domain}${insecure}#TUIC-${port}")
+  PENDING_INBOUND="{\"type\":\"tuic\",\"tag\":\"$tag\",\"listen\":\"::\",\"listen_port\":$port,"
+  PENDING_INBOUND+="\"users\":[{\"uuid\":\"$uuid\",\"password\":\"$passwd\"}],"
+  PENDING_INBOUND+="\"congestion_control\":\"bbr\","
+  PENDING_INBOUND+="\"tls\":{$TLS_CERT_JSON}}"
+
+  local h sni ins suffix
+  for h in "$LINK_V4" "$LINK_V6"; do
+    [ -z "$h" ] && continue
+    sni=$(sni_for "$h")
+    ins=$(insecure_for "$h" "allow_insecure")
+    suffix=""; { [ "$h" = "$LINK_V6" ] && [ -n "$LINK_V4" ]; } && suffix="-v6"
+    links+=("tuic://${uuid}:${passwd}@${h}:${port}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=${sni}${ins}#TUIC-${port}${suffix}")
   done
-  local meta selfsigned=false
-  is_self_signed "$c" && selfsigned=true
+
+  local meta hosts_json
+  build_certs_json
+  hosts_json=$(python3 -c "import json;print(json.dumps([x for x in ['$LINK_V4','$LINK_V6'] if x]))")
   meta=$(cat <<EOF
 {"tag":"$tag","proto":"tuic","name":"TUIC-${port}","port":$port,
- "uuid":"$uuid","password":"$passwd","domain":"$domain","path":null,
- "pubkey":null,"shortid":null,"cert":"$c","key":"$k","selfsigned":$selfsigned,
- "hosts":$(printf '%s\n' "${HOSTS[@]}" | python3 -c "import json,sys;print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))"),
+ "uuid":"$uuid","password":"$passwd","domain":"${CERT_DOMAINS[0]}","path":null,
+ "pubkey":null,"shortid":null,"certs":$CERTS_JSON,"selfsigned":$META_SELFSIGNED,
+ "link_v4":"$LINK_V4","link_v6":"$LINK_V6","hosts":$hosts_json,
  "created":"$(date '+%F %T')"}
 EOF
 )
   finish_add "$tag" "$meta" "TUIC" "${links[@]}"
 }
 
+
+# ---------- 5. Hysteria2 ----------
 # ---------- 5. Hysteria2 ----------
 add_hy2() {
   local port="${1:-}"
-  local passwd tag mode links=() h c k insecure domain
+  local passwd tag links=()
   info "添加 Hysteria2"
   if [ "$QUIET" = "1" ]; then
     [ -z "$port" ] && port=$(random_port)
     ensure_port_free "$port" || return 1
-    domain="bing.com"; c=""; k=""
-    passwd=$(openssl rand -hex 16); mode=3
+    passwd=$(openssl rand -hex 16)
+    quiet_link_addrs || return 1
+    CERT_DOMAINS=("bing.com")
+    local c="$SB_CERTS/hy2-${port}.crt" k="$SB_CERTS/hy2-${port}.key"
+    mkdir -p "$SB_CERTS"
+    openssl req -x509 -newkey rsa:2048 -keyout "$k" -out "$c" -days 3650 -nodes \
+      -subj "/CN=bing.com" >/dev/null 2>&1
+    chmod 600 "$c" "$k"
+    CERT_PATHS=("$c"); CERT_KEYS=("$k"); CERT_SELF=(1)
   else
     if [ -n "$port" ]; then ensure_port_free "$port" || return 1
     else port=$(ask_port "Hysteria2"); fi
     show_detected_certs
-    domain=$(ask_domain "bing.com")
-    read -r c k domain <<< "$(resolve_cert "$domain")" || return 1
-    passwd=$(ask_password); mode=$(ask_addr_mode)
+    ask_link_addrs || return 1
+    resolve_link_certs || return 1
+    if [ ${#CERT_DOMAINS[@]} -eq 0 ]; then
+      fallback_cert_domain || return 1
+    fi
+    passwd=$(ask_password)
   fi
-  if [ -z "$c" ]; then
-    c="$SB_CERTS/hy2-${port}.crt"; k="$SB_CERTS/hy2-${port}.key"
-    mkdir -p "$SB_CERTS"
-    openssl req -x509 -newkey rsa:2048 -keyout "$k" -out "$c" -days 3650 -nodes \
-      -subj "/CN=${domain}" >/dev/null 2>&1
-    chmod 600 "$c" "$k"
-  fi
-  is_self_signed "$c" && insecure="&insecure=1" || insecure=""
-  [ -n "$insecure" ] && warn "自签证书：客户端需开启 insecure"
   tag="hy2-${port}"
-  collect_hosts "$mode" || return 1
+  build_tls_cert_json '"alpn":["h3"],' || return 1
 
-  PENDING_INBOUND=$(cat <<EOF
-{"type":"hysteria2","tag":"$tag","listen":"::","listen_port":$port,
- "users":[{"password":"$passwd"}],
- "tls":{"enabled":true,"server_name":"$domain","alpn":["h3"],
-  "certificate_path":"$c","key_path":"$k"}}
-EOF
-)
-  for h in "${HOSTS[@]}"; do
-    links+=("hysteria2://${passwd}@${h}:${port}?sni=${domain}${insecure}#HY2-${port}")
+  PENDING_INBOUND="{\"type\":\"hysteria2\",\"tag\":\"$tag\",\"listen\":\"::\",\"listen_port\":$port,"
+  PENDING_INBOUND+="\"users\":[{\"password\":\"$passwd\"}],"
+  PENDING_INBOUND+="\"tls\":{$TLS_CERT_JSON}}"
+
+  local h sni ins suffix
+  for h in "$LINK_V4" "$LINK_V6"; do
+    [ -z "$h" ] && continue
+    sni=$(sni_for "$h")
+    ins=$(insecure_for "$h" "insecure")
+    suffix=""; { [ "$h" = "$LINK_V6" ] && [ -n "$LINK_V4" ]; } && suffix="-v6"
+    links+=("hysteria2://${passwd}@${h}:${port}?sni=${sni}${ins}#HY2-${port}${suffix}")
   done
-  local meta selfsigned=false
-  is_self_signed "$c" && selfsigned=true
+
+  local meta hosts_json
+  build_certs_json
+  hosts_json=$(python3 -c "import json;print(json.dumps([x for x in ['$LINK_V4','$LINK_V6'] if x]))")
   meta=$(cat <<EOF
 {"tag":"$tag","proto":"hy2","name":"HY2-${port}","port":$port,
- "uuid":null,"password":"$passwd","domain":"$domain","path":null,
- "pubkey":null,"shortid":null,"cert":"$c","key":"$k","selfsigned":$selfsigned,
- "hosts":$(printf '%s\n' "${HOSTS[@]}" | python3 -c "import json,sys;print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))"),
+ "uuid":null,"password":"$passwd","domain":"${CERT_DOMAINS[0]}","path":null,
+ "pubkey":null,"shortid":null,"certs":$CERTS_JSON,"selfsigned":$META_SELFSIGNED,
+ "link_v4":"$LINK_V4","link_v6":"$LINK_V6","hosts":$hosts_json,
  "created":"$(date '+%F %T')"}
 EOF
 )
   finish_add "$tag" "$meta" "Hysteria2" "${links[@]}"
 }
 
+
+# ---------- 6. AnyTLS ----------
 # ---------- 6. AnyTLS ----------
 add_anytls() {
   local port="${1:-}"
-  local passwd tag mode links=() h c k insecure domain
+  local passwd tag links=()
   info "添加 AnyTLS"
   if [ "$QUIET" = "1" ]; then
     [ -z "$port" ] && port=$(random_port)
     ensure_port_free "$port" || return 1
-    domain="bing.com"; c=""; k=""
-    passwd=$(openssl rand -hex 16); mode=3
+    passwd=$(openssl rand -hex 16)
+    quiet_link_addrs || return 1
+    CERT_DOMAINS=("bing.com")
+    local c="$SB_CERTS/anytls-${port}.crt" k="$SB_CERTS/anytls-${port}.key"
+    mkdir -p "$SB_CERTS"
+    openssl req -x509 -newkey rsa:2048 -keyout "$k" -out "$c" -days 3650 -nodes \
+      -subj "/CN=bing.com" >/dev/null 2>&1
+    chmod 600 "$c" "$k"
+    CERT_PATHS=("$c"); CERT_KEYS=("$k"); CERT_SELF=(1)
   else
     if [ -n "$port" ]; then ensure_port_free "$port" || return 1
     else port=$(ask_port "AnyTLS"); fi
     show_detected_certs
-    domain=$(ask_domain "bing.com")
-    read -r c k domain <<< "$(resolve_cert "$domain")" || return 1
-    passwd=$(ask_password); mode=$(ask_addr_mode)
+    ask_link_addrs || return 1
+    resolve_link_certs || return 1
+    if [ ${#CERT_DOMAINS[@]} -eq 0 ]; then
+      fallback_cert_domain || return 1
+    fi
+    passwd=$(ask_password)
   fi
-  if [ -z "$c" ]; then
-    c="$SB_CERTS/anytls-${port}.crt"; k="$SB_CERTS/anytls-${port}.key"
-    mkdir -p "$SB_CERTS"
-    openssl req -x509 -newkey rsa:2048 -keyout "$k" -out "$c" -days 3650 -nodes \
-      -subj "/CN=${domain}" >/dev/null 2>&1
-    chmod 600 "$c" "$k"
-  fi
-  is_self_signed "$c" && insecure="&insecure=1" || insecure=""
-  [ -n "$insecure" ] && warn "自签证书：客户端需开启 insecure"
   tag="anytls-${port}"
-  collect_hosts "$mode" || return 1
+  build_tls_cert_json || return 1
 
-  PENDING_INBOUND=$(cat <<EOF
-{"type":"anytls","tag":"$tag","listen":"::","listen_port":$port,
- "users":[{"password":"$passwd"}],
- "tls":{"enabled":true,"server_name":"$domain",
-  "certificate_path":"$c","key_path":"$k"}}
-EOF
-)
-  for h in "${HOSTS[@]}"; do
-    links+=("anytls://${passwd}@${h}:${port}?sni=${domain}${insecure}#AnyTLS-${port}")
+  PENDING_INBOUND="{\"type\":\"anytls\",\"tag\":\"$tag\",\"listen\":\"::\",\"listen_port\":$port,"
+  PENDING_INBOUND+="\"users\":[{\"password\":\"$passwd\"}],"
+  PENDING_INBOUND+="\"tls\":{$TLS_CERT_JSON}}"
+
+  local h sni ins suffix
+  for h in "$LINK_V4" "$LINK_V6"; do
+    [ -z "$h" ] && continue
+    sni=$(sni_for "$h")
+    ins=$(insecure_for "$h" "insecure")
+    suffix=""; { [ "$h" = "$LINK_V6" ] && [ -n "$LINK_V4" ]; } && suffix="-v6"
+    links+=("anytls://${passwd}@${h}:${port}?sni=${sni}${ins}#AnyTLS-${port}${suffix}")
   done
-  local meta selfsigned=false
-  is_self_signed "$c" && selfsigned=true
+
+  local meta hosts_json
+  build_certs_json
+  hosts_json=$(python3 -c "import json;print(json.dumps([x for x in ['$LINK_V4','$LINK_V6'] if x]))")
   meta=$(cat <<EOF
 {"tag":"$tag","proto":"anytls","name":"AnyTLS-${port}","port":$port,
- "uuid":null,"password":"$passwd","domain":"$domain","path":null,
- "pubkey":null,"shortid":null,"cert":"$c","key":"$k","selfsigned":$selfsigned,
- "hosts":$(printf '%s\n' "${HOSTS[@]}" | python3 -c "import json,sys;print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))"),
+ "uuid":null,"password":"$passwd","domain":"${CERT_DOMAINS[0]}","path":null,
+ "pubkey":null,"shortid":null,"certs":$CERTS_JSON,"selfsigned":$META_SELFSIGNED,
+ "link_v4":"$LINK_V4","link_v6":"$LINK_V6","hosts":$hosts_json,
  "created":"$(date '+%F %T')"}
 EOF
 )
   finish_add "$tag" "$meta" "AnyTLS" "${links[@]}"
+}
+
+# 生成 certs 数组 JSON → CERTS_JSON；设置 META_SELFSIGNED
+build_certs_json() {
+  CERTS_JSON=$(python3 -c "
+import json
+doms = '''${CERT_DOMAINS[*]}'''.split()
+paths = '''${CERT_PATHS[*]}'''.split()
+keys = '''${CERT_KEYS[*]}'''.split()
+selfs = '''${CERT_SELF[*]}'''.split()
+print(json.dumps([{'domain': d, 'cert': c, 'key': k, 'selfsigned': bool(int(s))}
+                  for d, c, k, s in zip(doms, paths, keys, selfs)]))")
+  if [[ " ${CERT_SELF[*]} " == *" 1 "* ]]; then META_SELFSIGNED=true; else META_SELFSIGNED=false; fi
 }
 
 # ---------- 一键搭建：零交互，直接出 REALITY 节点 ----------
@@ -838,32 +976,59 @@ for f in sorted(glob.glob(os.path.join(os.environ["SB_NODES"], "*.json"))):
         pass
 subdir = os.environ["SUBDIR"]
 
+def is_dom(h):
+    import re
+    if not h: return False
+    if re.match(r'^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$', h): return False
+    if h.startswith("["): return False
+    if ":" in h: return False
+    return True
+
+def bare_host(h):
+    return h[1:-1] if h.startswith("[") else h
+
+def sni_of(h, default):
+    return h if is_dom(h) else default
+
+def link_hosts(n):
+    # 返回 [(host, sni)] 列表
+    out = []
+    default_sni = n.get("domain") or "bing.com"
+    for key in ("link_v4", "link_v6"):
+        h = n.get(key)
+        if h:
+            out.append((h, sni_of(h, default_sni)))
+    if not out:
+        for h in n.get("hosts", []):
+            out.append((h, sni_of(h, default_sni)))
+    return out
+
 def gen_links(n):
+    # 优先用创建时存好的链接
+    if n.get("links"):
+        return n["links"]
     links = []
-    for h in n.get("hosts", []):
+    for h, sni in link_hosts(n):
         port, name = n["port"], n["name"]
         p = n["proto"]
         if p == "vless-reality":
-            links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni={n['domain']}&fp=chrome&pbk={n['pubkey']}&sid={n['shortid']}&type=tcp#{name}")
+            links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni={sni}&fp=chrome&pbk={n['pubkey']}&sid={n['shortid']}&type=tcp#{name}")
         elif p == "vless-ws-tls":
             path = n["path"].replace("/", "%2F")
-            links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&security=tls&sni={n['domain']}&type=ws&path={path}&host={n['domain']}#{name}")
+            links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&security=tls&sni={sni}&type=ws&path={path}&host={sni}#{name}")
         elif p == "vless-ws":
             path = n["path"].replace("/", "%2F")
             links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&type=ws&path={path}&security=none#{name}")
         elif p == "tuic":
             ins = "&allow_insecure=1" if n.get("selfsigned") else ""
-            links.append(f"tuic://{n['uuid']}:{n['password']}@{h}:{port}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni={n['domain']}{ins}#{name}")
+            links.append(f"tuic://{n['uuid']}:{n['password']}@{h}:{port}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni={sni}{ins}#{name}")
         elif p == "hy2":
             ins = "&insecure=1" if n.get("selfsigned") else ""
-            links.append(f"hysteria2://{n['password']}@{h}:{port}?sni={n['domain']}{ins}#{name}")
+            links.append(f"hysteria2://{n['password']}@{h}:{port}?sni={sni}{ins}#{name}")
         elif p == "anytls":
             ins = "&insecure=1" if n.get("selfsigned") else ""
-            links.append(f"anytls://{n['password']}@{h}:{port}?sni={n['domain']}{ins}#{name}")
+            links.append(f"anytls://{n['password']}@{h}:{port}?sni={sni}{ins}#{name}")
     return links
-
-def bare_host(h):
-    return h[1:-1] if h.startswith("[") else h
 
 # 1) v2rayN：分享链接 base64
 all_links = []
@@ -875,13 +1040,18 @@ with open(os.path.join(subdir, "v2rayn"), "w") as f:
 # 2) clash.yaml
 L = []
 L.append("proxies:")
+proxy_names = []
 for n in nodes:
-    h = bare_host(n["hosts"][0])
-    port, name = n["port"], n["name"]
-    p = n["proto"]
+    port, name, p = n["port"], n["name"], n["proto"]
     skip = "true" if n.get("selfsigned") else "false"
-    if p == "vless-reality":
-        L.append(f"""- name: "{name}"
+    for h_raw, sni in link_hosts(n):
+        h = bare_host(h_raw)
+        pname = name if h_raw == (n.get("link_v4") or "") else name + "-v6"
+        if not n.get("link_v4") or not n.get("link_v6"):
+            pname = name
+        proxy_names.append(pname)
+        if p == "vless-reality":
+            L.append(f"""- name: "{pname}"
   type: vless
   server: {h}
   port: {port}
@@ -890,16 +1060,16 @@ for n in nodes:
   tls: true
   network: tcp
   flow: xtls-rprx-vision
-  servername: {n['domain']}
+  servername: {sni}
   client-fingerprint: chrome
   reality-opts:
     public-key: {n['pubkey']}
     short-id: {n['shortid']}""")
-    elif p in ("vless-ws-tls", "vless-ws"):
-        tls = "true" if p == "vless-ws-tls" else "false"
-        sn = f"\n  servername: {n['domain']}" if p == "vless-ws-tls" else ""
-        host_h = f"\n      Host: {n['domain']}" if p == "vless-ws-tls" else ""
-        L.append(f"""- name: "{name}"
+        elif p in ("vless-ws-tls", "vless-ws"):
+            tls = "true" if p == "vless-ws-tls" else "false"
+            sn = f"\n  servername: {sni}" if p == "vless-ws-tls" else ""
+            host_h = f"\n      Host: {sni}" if p == "vless-ws-tls" else ""
+            L.append(f"""- name: "{pname}"
   type: vless
   server: {h}
   port: {port}
@@ -909,81 +1079,84 @@ for n in nodes:
   network: ws{sn}
   ws-opts:
     path: {n['path']}{host_h}""")
-    elif p == "tuic":
-        L.append(f"""- name: "{name}"
+        elif p == "tuic":
+            L.append(f"""- name: "{pname}"
   type: tuic
   server: {h}
   port: {port}
   uuid: {n['uuid']}
   password: {n['password']}
   alpn: [h3]
-  sni: {n['domain']}
+  sni: {sni}
   skip-cert-verify: {skip}
   congestion-controller: bbr
   udp-relay-mode: native""")
-    elif p == "hy2":
-        L.append(f"""- name: "{name}"
+        elif p == "hy2":
+            L.append(f"""- name: "{pname}"
   type: hysteria2
   server: {h}
   port: {port}
   password: {n['password']}
-  sni: {n['domain']}
+  sni: {sni}
   skip-cert-verify: {skip}""")
-    elif p == "anytls":
-        L.append(f"""- name: "{name}"
+        elif p == "anytls":
+            L.append(f"""- name: "{pname}"
   type: anytls
   server: {h}
   port: {port}
   password: {n['password']}
-  sni: {n['domain']}
+  sni: {sni}
   skip-cert-verify: {skip}""")
 L.append("")
 L.append("proxy-groups:")
 L.append("  - name: 手动选择")
 L.append("    type: select")
 L.append("    proxies:")
-for n in nodes:
-    L.append(f'      - "{n["name"]}"')
+for pn in proxy_names:
+    L.append(f'      - "{pn}"')
 with open(os.path.join(subdir, "clash.yaml"), "w") as f:
     f.write("\n".join(L) + "\n")
 
 # 3) singbox.json
 outbounds = []
 for n in nodes:
-    h = bare_host(n["hosts"][0])
-    port = n["port"]
-    p = n["proto"]
-    if p == "vless-reality":
-        outbounds.append({"type": "vless", "tag": n["name"], "server": h, "server_port": port,
-            "uuid": n["uuid"], "flow": "xtls-rprx-vision",
-            "tls": {"enabled": True, "server_name": n["domain"],
-                "utls": {"enabled": True, "fingerprint": "chrome"},
-                "reality": {"enabled": True, "public_key": n["pubkey"], "short_id": n["shortid"]}}})
-    elif p == "vless-ws-tls":
-        outbounds.append({"type": "vless", "tag": n["name"], "server": h, "server_port": port,
-            "uuid": n["uuid"],
-            "transport": {"type": "ws", "path": n["path"], "headers": {"Host": n["domain"]}},
-            "tls": {"enabled": True, "server_name": n["domain"],
-                "insecure": bool(n.get("selfsigned"))}})
-    elif p == "vless-ws":
-        outbounds.append({"type": "vless", "tag": n["name"], "server": h, "server_port": port,
-            "uuid": n["uuid"], "transport": {"type": "ws", "path": n["path"]}})
-    elif p == "tuic":
-        outbounds.append({"type": "tuic", "tag": n["name"], "server": h, "server_port": port,
-            "uuid": n["uuid"], "password": n["password"],
-            "congestion_control": "bbr", "udp_relay_mode": "native",
-            "tls": {"enabled": True, "server_name": n["domain"], "alpn": ["h3"],
-                "insecure": bool(n.get("selfsigned"))}})
-    elif p == "hy2":
-        outbounds.append({"type": "hysteria2", "tag": n["name"], "server": h, "server_port": port,
-            "password": n["password"],
-            "tls": {"enabled": True, "server_name": n["domain"], "alpn": ["h3"],
-                "insecure": bool(n.get("selfsigned"))}})
-    elif p == "anytls":
-        outbounds.append({"type": "anytls", "tag": n["name"], "server": h, "server_port": port,
-            "password": n["password"],
-            "tls": {"enabled": True, "server_name": n["domain"],
-                "insecure": bool(n.get("selfsigned"))}})
+    port, p = n["port"], n["proto"]
+    for h_raw, sni in link_hosts(n):
+        h = bare_host(h_raw)
+        tag = n["name"] if h_raw == (n.get("link_v4") or "") else n["name"] + "-v6"
+        if not n.get("link_v4") or not n.get("link_v6"):
+            tag = n["name"]
+        if p == "vless-reality":
+            outbounds.append({"type": "vless", "tag": tag, "server": h, "server_port": port,
+                "uuid": n["uuid"], "flow": "xtls-rprx-vision",
+                "tls": {"enabled": True, "server_name": sni,
+                    "utls": {"enabled": True, "fingerprint": "chrome"},
+                    "reality": {"enabled": True, "public_key": n["pubkey"], "short_id": n["shortid"]}}})
+        elif p == "vless-ws-tls":
+            outbounds.append({"type": "vless", "tag": tag, "server": h, "server_port": port,
+                "uuid": n["uuid"],
+                "transport": {"type": "ws", "path": n["path"], "headers": {"Host": sni}},
+                "tls": {"enabled": True, "server_name": sni,
+                    "insecure": bool(n.get("selfsigned"))}})
+        elif p == "vless-ws":
+            outbounds.append({"type": "vless", "tag": tag, "server": h, "server_port": port,
+                "uuid": n["uuid"], "transport": {"type": "ws", "path": n["path"]}})
+        elif p == "tuic":
+            outbounds.append({"type": "tuic", "tag": tag, "server": h, "server_port": port,
+                "uuid": n["uuid"], "password": n["password"],
+                "congestion_control": "bbr", "udp_relay_mode": "native",
+                "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"],
+                    "insecure": bool(n.get("selfsigned"))}})
+        elif p == "hy2":
+            outbounds.append({"type": "hysteria2", "tag": tag, "server": h, "server_port": port,
+                "password": n["password"],
+                "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"],
+                    "insecure": bool(n.get("selfsigned"))}})
+        elif p == "anytls":
+            outbounds.append({"type": "anytls", "tag": tag, "server": h, "server_port": port,
+                "password": n["password"],
+                "tls": {"enabled": True, "server_name": sni,
+                    "insecure": bool(n.get("selfsigned"))}})
 with open(os.path.join(subdir, "singbox.json"), "w") as f:
     json.dump({"outbounds": outbounds}, f, indent=2, ensure_ascii=False)
 print(f"订阅已生成：{len(nodes)} 个节点")
@@ -1090,36 +1263,56 @@ pick_node() {
 }
 
 regen_node_links() {
-  # $1: tag → 根据元数据重新生成 links 并写回
-  SB_NODES="$SB_NODES" RETAG="$1" python3 - <<'PYEOF'
-import json, os, glob
+  # $1: tag → 根据元数据重新生成 links 并写回（sni 跟随各自链接域名）
+  SB_NODES="$SB_NODES" RETAG="$1" python3 - <<'PYEOF2'
+import json, os, re
 p = os.path.join(os.environ["SB_NODES"], os.environ["RETAG"] + ".json")
 n = json.load(open(p))
+
+def is_dom(h):
+    if not h: return False
+    if re.match(r'^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$', h): return False
+    if h.startswith("["): return False
+    if ":" in h: return False
+    return True
+
+def sni_of(h, default):
+    return h if is_dom(h) else default
+
 links = []
-for h in n.get("hosts", []):
-    port, name = n["port"], n["name"]
-    q = n["proto"]
+hosts = []
+for key in ("link_v4", "link_v6"):
+    h = n.get(key)
+    if h: hosts.append(h)
+if not hosts:
+    hosts = n.get("hosts", [])
+default_sni = n.get("domain") or "bing.com"
+port, name, q = n["port"], n["name"], n["proto"]
+for h in hosts:
+    sni = sni_of(h, default_sni)
+    suffix = "-v6" if h == n.get("link_v6") and n.get("link_v4") else ""
     if q == "vless-reality":
-        links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni={n['domain']}&fp=chrome&pbk={n['pubkey']}&sid={n['shortid']}&type=tcp#{name}")
+        links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni={sni}&fp=chrome&pbk={n['pubkey']}&sid={n['shortid']}&type=tcp#{name}{suffix}")
     elif q == "vless-ws-tls":
         path = n["path"].replace("/", "%2F")
-        links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&security=tls&sni={n['domain']}&type=ws&path={path}&host={n['domain']}#{name}")
+        links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&security=tls&sni={sni}&type=ws&path={path}&host={sni}#{name}{suffix}")
     elif q == "vless-ws":
         path = n["path"].replace("/", "%2F")
-        links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&type=ws&path={path}&security=none#{name}")
+        links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&type=ws&path={path}&security=none#{name}{suffix}")
     elif q == "tuic":
         ins = "&allow_insecure=1" if n.get("selfsigned") else ""
-        links.append(f"tuic://{n['uuid']}:{n['password']}@{h}:{port}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni={n['domain']}{ins}#{name}")
+        links.append(f"tuic://{n['uuid']}:{n['password']}@{h}:{port}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni={sni}{ins}#{name}{suffix}")
     elif q == "hy2":
         ins = "&insecure=1" if n.get("selfsigned") else ""
-        links.append(f"hysteria2://{n['password']}@{h}:{port}?sni={n['domain']}{ins}#{name}")
+        links.append(f"hysteria2://{n['password']}@{h}:{port}?sni={sni}{ins}#{name}{suffix}")
     elif q == "anytls":
         ins = "&insecure=1" if n.get("selfsigned") else ""
-        links.append(f"anytls://{n['password']}@{h}:{port}?sni={n['domain']}{ins}#{name}")
+        links.append(f"anytls://{n['password']}@{h}:{port}?sni={sni}{ins}#{name}{suffix}")
 n["links"] = links
+n["hosts"] = hosts
 json.dump(n, open(p, "w"), indent=2, ensure_ascii=False)
 print("\n".join(links))
-PYEOF
+PYEOF2
 }
 
 update_node_field() {
@@ -1144,7 +1337,7 @@ modify_node() {
   echo "  2) UUID"
   echo "  3) 密码"
   echo "  4) 备注名"
-  echo "  5) 域名/sni"
+  echo "  5) 链接地址（v4/v6 域名）"
   field=$(read_choice "选择: ")
   cp "$SB_CONF" "$SB_CONF.bak"
   case "$field" in
@@ -1186,26 +1379,40 @@ modify_node() {
       [ -z "$newval" ] && { warn "备注名不能为空"; return 1; }
       update_node_field "$tag" "name" "$newval" ;;
     5)
-      newval=$(ask_domain "")
-      [ -z "$newval" ] && { warn "域名不能为空"; return 1; }
+      echo "修改链接地址（v4/v6 可用不同域名）"
+      ask_link_addrs || return 1
+      update_node_field "$tag" "link_v4" "$LINK_V4"
+      update_node_field "$tag" "link_v6" "$LINK_V6"
       if [ "$proto" = "vless-reality" ]; then
-        json_update_inbound "$tag" "{\"tls\": {\"server_name\": \"$newval\", \"reality\": {\"handshake\": {\"server\": \"$newval\"}}}}"
-      else
-        json_update_inbound "$tag" "{\"tls\": {\"server_name\": \"$newval\"}}"
-      fi
-      update_node_field "$tag" "domain" "$newval"
-      # TLS 类协议换域名后重新解析证书
-      if [[ "$proto" == "tuic" || "$proto" == "hy2" || "$proto" == "anytls" || "$proto" == "vless-ws-tls" ]]; then
-        local c k selfsigned=false
-        read -r c k newval <<< "$(resolve_cert "$newval")" || { cp "$SB_CONF.bak" "$SB_CONF"; err "已回滚"; return 1; }
-        json_update_inbound "$tag" "{\"tls\": {\"certificate_path\": \"$c\", \"key_path\": \"$k\"}}"
-        update_node_field "$tag" "cert" "$c"; update_node_field "$tag" "key" "$k"
-        is_self_signed "$c" && selfsigned=true
-        SB_NODES="$SB_NODES" UFTAG="$tag" python3 -c "
+        : # REALITY 无需证书，sni 仍是伪装域名
+      elif [[ "$proto" == "tuic" || "$proto" == "hy2" || "$proto" == "anytls" || "$proto" == "vless-ws-tls" ]]; then
+        resolve_link_certs || { cp "$SB_CONF.bak" "$SB_CONF"; err "已回滚"; return 1; }
+        if [ ${#CERT_DOMAINS[@]} -eq 0 ]; then
+          fallback_cert_domain || { cp "$SB_CONF.bak" "$SB_CONF"; err "已回滚"; return 1; }
+        fi
+        local extra=""
+        { [ "$proto" = "tuic" ] || [ "$proto" = "hy2" ]; } && extra='"alpn":["h3"],'
+        build_tls_cert_json "$extra"
+        SB_CONF="$SB_CONF" UPTAG="$tag" NEW_TLS="$TLS_CERT_JSON" python3 - <<'PYEOF3'
 import json, os
-p = os.path.join(os.environ['SB_NODES'], os.environ['UFTAG'] + '.json')
-n = json.load(open(p)); n['selfsigned'] = True if '$selfsigned' == 'true' else False
-json.dump(n, open(p, 'w'), indent=2, ensure_ascii=False)"
+pp = os.environ["SB_CONF"]
+conf = json.load(open(pp))
+tls_json = "{" + os.environ["NEW_TLS"] + "}"
+for i in conf.get("inbounds", []):
+    if i.get("tag") == os.environ["UPTAG"]:
+        i["tls"] = json.loads(tls_json)
+json.dump(conf, open(pp, "w"), indent=2, ensure_ascii=False)
+PYEOF3
+        build_certs_json
+        SB_NODES="$SB_NODES" UFTAG="$tag" UDOMAIN="${CERT_DOMAINS[0]}" UCERTS="$CERTS_JSON" USELF="$META_SELFSIGNED" python3 - <<'PYEOF4'
+import json, os
+pp = os.path.join(os.environ["SB_NODES"], os.environ["UFTAG"] + ".json")
+nn = json.load(open(pp))
+nn["domain"] = os.environ["UDOMAIN"]
+nn["certs"] = json.loads(os.environ["UCERTS"])
+nn["selfsigned"] = os.environ["USELF"] == "true"
+json.dump(nn, open(pp, "w"), indent=2, ensure_ascii=False)
+PYEOF4
       fi ;;
     *) warn "无效选择"; return 1 ;;
   esac

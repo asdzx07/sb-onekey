@@ -1413,17 +1413,29 @@ add_node_menu() {
     echo "  5. Hysteria2"
     echo "  6. AnyTLS"
     echo "  0. 返回"
-    read -rp "选择: " n
-    case "$n" in
-      1) add_reality ;;
-      2) add_ws_tls ;;
-      3) add_ws ;;
-      4) add_tuic ;;
-      5) add_hy2 ;;
-      6) add_anytls ;;
-      0) return ;;
-      *) warn "无效选择" ;;
-    esac
+    read -rp "选择 (可多选，如 1 4 5，空格分隔): " input
+    [ "${input:-}" = "0" ] && return
+    # 解析多选，去重，忽略无效项
+    local sel nums=()
+    for sel in ${input//,/ }; do
+      case "$sel" in
+        1|2|3|4|5|6)
+          [[ " ${nums[*]} " != *" $sel "* ]] && nums+=("$sel") ;;
+        *) warn "忽略无效选项: $sel" ;;
+      esac
+    done
+    [ ${#nums[@]} -eq 0 ] && { warn "未选择有效协议"; continue; }
+    [ ${#nums[@]} -gt 1 ] && info "将依次添加 ${#nums[@]} 个节点"
+    for sel in "${nums[@]}"; do
+      case "$sel" in
+        1) add_reality ;;
+        2) add_ws_tls ;;
+        3) add_ws ;;
+        4) add_tuic ;;
+        5) add_hy2 ;;
+        6) add_anytls ;;
+      esac
+    done
   done
 }
 

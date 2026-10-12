@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.1.2"
+SCRIPT_VER="2.1.3"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -447,8 +447,8 @@ QUIET=0  # CLI 模式置 1，全自动不提问
 
 is_self_signed() {
   local iss sub
-  iss=$(openssl x509 -noout -in "$1" -issuer 2>/dev/null)
-  sub=$(openssl x509 -noout -in "$1" -subject 2>/dev/null)
+  iss=$(openssl x509 -noout -in "$1" -issuer 2>/dev/null | sed 's/^issuer= *//')
+  sub=$(openssl x509 -noout -in "$1" -subject 2>/dev/null | sed 's/^subject= *//')
   [ -n "$iss" ] && [ "$iss" = "$sub" ]
 }
 

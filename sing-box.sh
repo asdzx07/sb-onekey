@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.0.1"
+SCRIPT_VER="2.0.2"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -217,11 +217,41 @@ except Exception:
   [ ${#CERT_MAP[@]} -gt 0 ] && info "检测到 ${#CERT_MAP[@]} 张可用证书: ${!CERT_MAP[*]}"
 }
 
+# 展示已检测证书，供用户挑选
+show_detected_certs() {
+  if [ ${#CERT_MAP[@]} -gt 0 ]; then
+    echo "本机检测到以下证书："
+    local d
+    for d in "${!CERT_MAP[@]}"; do
+      echo "  - $d（${CERT_SRC[$d]:-未知来源}，有效期至 $(cert_expiry "${CERT_MAP[$d]%%|*}")）"
+    done
+  else
+    warn "本机未检测到可用证书"
+  fi
+}
+
 # $1: 域名 → stdout 输出 "cert_path key_path"
 resolve_cert() {
   local domain="$1" entry c k yn choice line
   mkdir -p "$SB_CERTS"
   entry="${CERT_MAP[$domain]:-}"
+  # 域名没命中但本机有证书时，让用户从列表里挑
+  if [ -z "$entry" ] && [ ${#CERT_MAP[@]} -gt 0 ]; then
+    echo "[$domain] 没有匹配的证书，本机有以下证书：" >&2
+    local d i=1 pick
+    local clist=()
+    for d in "${!CERT_MAP[@]}"; do
+      echo "  $((i++)). $d" >&2
+      clist+=("$d")
+    done
+    read -rp "输入序号使用其中一个，回车继续其他方式: " pick
+    pick=$(echo "$pick" | tr -d '\r' | xargs)
+    if [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le ${#clist[@]} ]; then
+      domain="${clist[$((pick-1))]}"
+      entry="${CERT_MAP[$domain]}"
+      echo "已切换域名为: $domain" >&2
+    fi
+  fi
   if [ -n "$entry" ]; then
     c="${entry%%|*}"; k="${entry##*|}"
     echo "检测到 [$domain] 的现成证书 (${CERT_SRC[$domain]:-})：" >&2
@@ -229,7 +259,7 @@ resolve_cert() {
     echo "  私钥: $k" >&2
     read -rp "回车直接使用，n 换其他方式 [Y/n]: " yn
     if [ "${yn:-Y}" != "n" ] && [ "${yn:-Y}" != "N" ]; then
-      echo "$c $k"; return 0
+      echo "$c $k $domain"; return 0
     fi
   fi
   echo "证书来源：" >&2
@@ -243,7 +273,7 @@ resolve_cert() {
       read -rp "证书文件路径 (fullchain): " c
       read -rp "私钥文件路径: " k
       if [ ! -f "$c" ] || [ ! -f "$k" ]; then err "文件不存在" >&2; return 1; fi
-      echo "$c $k"; return 0 ;;
+      echo "$c $k $domain"; return 0 ;;
     3)
       c="$SB_CERTS/${domain}.crt"; k="$SB_CERTS/${domain}.key"
       echo "粘贴证书 PEM 内容（从 -----BEGIN CERTIFICATE----- 开始），结束单独一行输入 EOF：" >&2
@@ -261,14 +291,14 @@ resolve_cert() {
       chmod 600 "$c" "$k"
       if ! openssl x509 -noout -in "$c" 2>/dev/null; then err "证书内容无效" >&2; return 1; fi
       ok "证书已保存，下次自动检测可识别" >&2
-      echo "$c $k"; return 0 ;;
+      echo "$c $k $domain"; return 0 ;;
     *)
       need_cmd openssl
       c="$SB_CERTS/${domain}.crt"; k="$SB_CERTS/${domain}.key"
       openssl req -x509 -newkey rsa:2048 -keyout "$k" -out "$c" -days 3650 -nodes \
         -subj "/CN=${domain}" >/dev/null 2>&1
       chmod 600 "$c" "$k"
-      echo "$c $k"; return 0 ;;
+      echo "$c $k $domain"; return 0 ;;
   esac
 }
 
@@ -537,10 +567,11 @@ add_ws_tls() {
   else
     if [ -n "$port" ]; then ensure_port_free "$port" || return 1
     else port=$(ask_port "VLESS/WS/TLS"); fi
+    show_detected_certs
     [ -z "$domain" ] && domain=$(ask_domain "")
     [ -z "$domain" ] && { err "域名不能为空"; return 1; }
     if [ -z "$cert" ]; then
-      read -r c k <<< "$(resolve_cert "$domain")" || return 1
+      read -r c k domain <<< "$(resolve_cert "$domain")" || return 1
     else c="$cert"; k="$key"; fi
     uuid=$(ask_uuid); mode=$(ask_addr_mode)
   fi
@@ -624,8 +655,9 @@ add_tuic() {
   else
     if [ -n "$port" ]; then ensure_port_free "$port" || return 1
     else port=$(ask_port "TUIC"); fi
+    show_detected_certs
     domain=$(ask_domain "bing.com")
-    read -r c k <<< "$(resolve_cert "$domain")" || return 1
+    read -r c k domain <<< "$(resolve_cert "$domain")" || return 1
     uuid=$(ask_uuid); passwd=$(ask_password); mode=$(ask_addr_mode)
   fi
   if [ -z "$c" ]; then
@@ -678,8 +710,9 @@ add_hy2() {
   else
     if [ -n "$port" ]; then ensure_port_free "$port" || return 1
     else port=$(ask_port "Hysteria2"); fi
+    show_detected_certs
     domain=$(ask_domain "bing.com")
-    read -r c k <<< "$(resolve_cert "$domain")" || return 1
+    read -r c k domain <<< "$(resolve_cert "$domain")" || return 1
     passwd=$(ask_password); mode=$(ask_addr_mode)
   fi
   if [ -z "$c" ]; then
@@ -730,8 +763,9 @@ add_anytls() {
   else
     if [ -n "$port" ]; then ensure_port_free "$port" || return 1
     else port=$(ask_port "AnyTLS"); fi
+    show_detected_certs
     domain=$(ask_domain "bing.com")
-    read -r c k <<< "$(resolve_cert "$domain")" || return 1
+    read -r c k domain <<< "$(resolve_cert "$domain")" || return 1
     passwd=$(ask_password); mode=$(ask_addr_mode)
   fi
   if [ -z "$c" ]; then
@@ -1163,7 +1197,7 @@ modify_node() {
       # TLS 类协议换域名后重新解析证书
       if [[ "$proto" == "tuic" || "$proto" == "hy2" || "$proto" == "anytls" || "$proto" == "vless-ws-tls" ]]; then
         local c k selfsigned=false
-        read -r c k <<< "$(resolve_cert "$newval")" || { cp "$SB_CONF.bak" "$SB_CONF"; err "已回滚"; return 1; }
+        read -r c k newval <<< "$(resolve_cert "$newval")" || { cp "$SB_CONF.bak" "$SB_CONF"; err "已回滚"; return 1; }
         json_update_inbound "$tag" "{\"tls\": {\"certificate_path\": \"$c\", \"key_path\": \"$k\"}}"
         update_node_field "$tag" "cert" "$c"; update_node_field "$tag" "key" "$k"
         is_self_signed "$c" && selfsigned=true

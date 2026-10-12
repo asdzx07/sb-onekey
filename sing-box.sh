@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.1.0"
+SCRIPT_VER="2.1.1"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -524,17 +524,23 @@ fallback_cert_domain() {
 
 # 生成 tls 的证书部分 JSON → TLS_CERT_JSON
 # $1: 额外字段（如 '"alpn":["h3"],'）
+# 单证书用 certificate_path；多证书内嵌 PEM 内容（sing-box 的 certificate 是 []string）
 build_tls_cert_json() {
-  local extra="${1:-}" n=${#CERT_DOMAINS[@]} arr="" i
+  local extra="${1:-}" n=${#CERT_DOMAINS[@]}
   if [ $n -eq 0 ]; then err "没有可用证书"; return 1; fi
   if [ $n -eq 1 ]; then
     TLS_CERT_JSON="\"certificate_path\":\"${CERT_PATHS[0]}\",\"key_path\":\"${CERT_KEYS[0]}\""
   else
-    for ((i=0; i<n; i++)); do
-      [ -n "$arr" ] && arr+=","
-      arr+="{\"certificate_path\":\"${CERT_PATHS[i]}\",\"key_path\":\"${CERT_KEYS[i]}\"}"
-    done
-    TLS_CERT_JSON="\"certificate\":[$arr]"
+    local certs_json keys_json
+    certs_json=$(python3 -c "
+import json
+paths = '''${CERT_PATHS[*]}'''.split()
+print(json.dumps([open(p).read() for p in paths]))")
+    keys_json=$(python3 -c "
+import json
+paths = '''${CERT_KEYS[*]}'''.split()
+print(json.dumps([open(p).read() for p in paths]))")
+    TLS_CERT_JSON="\"certificate\":$certs_json,\"key\":$keys_json"
   fi
   TLS_CERT_JSON="\"enabled\":true,\"server_name\":\"${CERT_DOMAINS[0]}\",${extra}${TLS_CERT_JSON}"
 }

@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.1.6"
+SCRIPT_VER="2.1.7"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1150,6 +1150,7 @@ for n in nodes:
   server: {h}
   port: {port}
   password: {n['password']}
+  client-fingerprint: chrome
   sni: {sni}
   skip-cert-verify: {skip}""")
 L.append("")
@@ -1201,6 +1202,7 @@ for n in nodes:
             outbounds.append({"type": "anytls", "tag": tag, "server": h, "server_port": port,
                 "password": n["password"],
                 "tls": {"enabled": True, "server_name": sni,
+                    "utls": {"enabled": True, "fingerprint": "chrome"},
                     "insecure": cert_ss(n, sni)}})
 with open(os.path.join(subdir, "singbox.json"), "w") as f:
     json.dump({"outbounds": outbounds}, f, indent=2, ensure_ascii=False)

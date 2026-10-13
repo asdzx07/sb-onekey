@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.1.8"
+SCRIPT_VER="2.1.9"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1216,8 +1216,8 @@ sb_config = {
     "log": {"level": "info", "timestamp": True},
     "dns": {
         "servers": [
-            {"tag": "google", "address": "tls://8.8.8.8"},
-            {"tag": "local", "address": "223.5.5.5", "detour": "direct"}
+            {"tag": "google", "type": "tls", "server": "8.8.8.8"},
+            {"tag": "local", "type": "udp", "server": "223.5.5.5", "detour": "direct"}
         ],
         "rules": [{"outbound": "any", "server": "local"}],
         "final": "google"

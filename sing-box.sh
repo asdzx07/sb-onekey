@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.1.9"
+SCRIPT_VER="2.2.0"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1003,7 +1003,11 @@ build_subscriptions() {
   fi
   subdir="$SB_SUB/$token"
   mkdir -p "$subdir"
-  SB_NODES="$SB_NODES" SUBDIR="$subdir" python3 - <<'PYEOF'
+  # 原子写入：先写临时目录，成功后才 mv 覆盖，避免失败时留下坏订阅
+  local tmpdir
+  tmpdir=$(mktemp -d)
+  # 超时保护：Python 超过 60 秒未完成则杀掉，防止 hung 死进程
+  SB_NODES="$SB_NODES" SUBDIR="$tmpdir" timeout 60 python3 - <<'PYEOF'
 import json, os, glob, base64
 
 nodes = []
@@ -1240,6 +1244,20 @@ with open(os.path.join(subdir, "singbox.json"), "w") as f:
     json.dump(sb_config, f, indent=2, ensure_ascii=False)
 print(f"订阅已生成：{len(nodes)} 个节点")
 PYEOF
+  local py_rc=$?
+  if [ $py_rc -eq 0 ] && [ -f "$tmpdir/v2rayn" ] && [ -f "$tmpdir/clash.yaml" ] && [ -f "$tmpdir/singbox.json" ]; then
+    # 备份旧订阅，失败时可回滚
+    local bakdir="$subdir.bak.$(date +%Y%m%d%H%M%S)"
+    [ -f "$subdir/v2rayn" ] && mkdir -p "$bakdir" && cp "$subdir"/v2rayn "$subdir"/clash.yaml "$subdir"/singbox.json "$bakdir/" 2>/dev/null
+    mv "$tmpdir"/v2rayn "$tmpdir"/clash.yaml "$tmpdir"/singbox.json "$subdir/"
+    # 只保留最近 3 个备份
+    ls -dt "$SB_SUB"/.*.bak.* "$subdir".bak.* 2>/dev/null | tail -n +4 | xargs -r rm -rf
+    echo "订阅已更新：$subdir"
+  else
+    warn "订阅生成失败（Python 退出码 $py_rc），已保留旧订阅，临时文件已清理"
+  fi
+  rm -rf "$tmpdir"
+  return $py_rc
 }
 
 sub_urls() {
@@ -1891,4 +1909,7 @@ main() {
   main_menu
 }
 
-main "$@"
+# 被 source 时只定义函数，不跑主流程（防 hung 死进程）
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

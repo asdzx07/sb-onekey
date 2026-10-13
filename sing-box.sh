@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.1.7"
+SCRIPT_VER="2.1.8"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1163,8 +1163,9 @@ for pn in proxy_names:
 with open(os.path.join(subdir, "clash.yaml"), "w") as f:
     f.write("\n".join(L) + "\n")
 
-# 3) singbox.json
+# 3) singbox.json — 完整客户端配置（可直接导入 sing-box 客户端）
 outbounds = []
+node_tags = []
 for n in nodes:
     port, p = n["port"], n["proto"]
     for h_raw, sni in link_hosts(n):
@@ -1172,6 +1173,7 @@ for n in nodes:
         tag = n["name"] if h_raw == (n.get("link_v4") or "") else n["name"] + "-v6"
         if not n.get("link_v4") or not n.get("link_v6"):
             tag = n["name"]
+        node_tags.append(tag)
         if p == "vless-reality":
             outbounds.append({"type": "vless", "tag": tag, "server": h, "server_port": port,
                 "uuid": n["uuid"], "flow": "xtls-rprx-vision",
@@ -1183,6 +1185,7 @@ for n in nodes:
                 "uuid": n["uuid"],
                 "transport": {"type": "ws", "path": n["path"], "headers": {"Host": sni}},
                 "tls": {"enabled": True, "server_name": sni,
+                    "utls": {"enabled": True, "fingerprint": "chrome"},
                     "insecure": cert_ss(n, sni)}})
         elif p == "vless-ws":
             outbounds.append({"type": "vless", "tag": tag, "server": h, "server_port": port,
@@ -1204,8 +1207,37 @@ for n in nodes:
                 "tls": {"enabled": True, "server_name": sni,
                     "utls": {"enabled": True, "fingerprint": "chrome"},
                     "insecure": cert_ss(n, sni)}})
+outbounds.append({"type": "selector", "tag": "手动选择", "outbounds": node_tags,
+                  "default": node_tags[0] if node_tags else "direct"})
+outbounds.append({"type": "direct", "tag": "direct"})
+outbounds.append({"type": "block", "tag": "block"})
+outbounds.append({"type": "dns", "tag": "dns-out"})
+sb_config = {
+    "log": {"level": "info", "timestamp": True},
+    "dns": {
+        "servers": [
+            {"tag": "google", "address": "tls://8.8.8.8"},
+            {"tag": "local", "address": "223.5.5.5", "detour": "direct"}
+        ],
+        "rules": [{"outbound": "any", "server": "local"}],
+        "final": "google"
+    },
+    "inbounds": [
+        {"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1",
+         "listen_port": 1080, "sniff": True}
+    ],
+    "outbounds": outbounds,
+    "route": {
+        "rules": [
+            {"protocol": "dns", "outbound": "dns-out"},
+            {"ip_cidr": ["224.0.0.0/3", "ff00::/8"], "outbound": "block"}
+        ],
+        "final": "手动选择",
+        "auto_detect_interface": True
+    }
+}
 with open(os.path.join(subdir, "singbox.json"), "w") as f:
-    json.dump({"outbounds": outbounds}, f, indent=2, ensure_ascii=False)
+    json.dump(sb_config, f, indent=2, ensure_ascii=False)
 print(f"订阅已生成：{len(nodes)} 个节点")
 PYEOF
 }

@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.2.0"
+SCRIPT_VER="2.2.1"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -490,9 +490,10 @@ ask_link_addrs() {
   elif [ -n "$h4" ]; then LINK_V4="$h4"
   else LINK_V4=""; fi
 
-  read -rp "IPv6 链接地址 [输入域名，回车=用IP${h6:+ [$h6]}，无则跳过]: " d6
+  read -rp "IPv6 链接地址 [输入域名，n=不生成v6节点，回车=用IP${h6:+ [$h6]}]: " d6
   d6=$(echo "$d6" | tr -d '\r' | xargs)
-  if [ -n "$d6" ]; then LINK_V6="$d6"
+  if [ "$d6" = "n" ] || [ "$d6" = "N" ]; then LINK_V6=""
+  elif [ -n "$d6" ]; then LINK_V6="$d6"
   elif [ -n "$h6" ]; then LINK_V6="[$h6]"
   else LINK_V6=""; fi
 
@@ -1345,17 +1346,17 @@ show_subscriptions() {
 
 # ---------- 节点管理 ----------
 pick_node() {
-  # 选择节点 → 输出 tag
+  # 选择节点 → 输出 tag（列表走 stderr，避免被 $() 捕获）
   local tags i=1 t n
   mapfile -t tags < <(list_node_tags)
   [ ${#tags[@]} -eq 0 ] && { warn "还没有节点"; return 1; }
   for t in "${tags[@]}"; do
     n=$(python3 -c "import json;print(json.load(open('$SB_NODES/$t.json')).get('name',''))" 2>/dev/null)
-    echo "  $((i++)). $t ($n)"
+    echo "  $((i++)). $t ($n)" >&2
   done
   n=$(read_choice "选择 (序号): ")
   t=${tags[$((n-1))]:-}
-  [ -z "$t" ] && { warn "无效序号"; return 1; }
+  [ -z "$t" ] && { warn "无效序号" >&2; return 1; }
   echo "$t"
 }
 

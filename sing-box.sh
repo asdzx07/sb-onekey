@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.2.5"
+SCRIPT_VER="2.2.6"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -726,7 +726,7 @@ add_ws_tls() {
   PENDING_INBOUND+="\"transport\":{\"type\":\"ws\",\"path\":\"$path\"},"
   PENDING_INBOUND+="\"tls\":{$TLS_CERT_JSON}}"
 
-  local enc_path=${path//\//%2F}
+  local enc_path="$path"
   local h sni ins suffix base
   for h in "$LINK_V4" "$LINK_V6"; do
     [ -z "$h" ] && continue
@@ -777,7 +777,7 @@ add_ws() {
  "transport":{"type":"ws","path":"$path"}}
 EOF
 )
-  local enc_path=${path//\//%2F}
+  local enc_path="$path"
   local base="vless://${uuid}@%s:${port}?encryption=none&type=ws&path=${enc_path}&security=none"
   [ -n "$LINK_V4" ] && links+=("$(printf "$base#WS-${port}" "$LINK_V4")")
   [ -n "$LINK_V6" ] && links+=("$(printf "$base#WS-${port}-v6" "$LINK_V6")")
@@ -1071,10 +1071,10 @@ def gen_links(n):
         if p == "vless-reality":
             links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni={sni}&fp=chrome&pbk={n['pubkey']}&sid={n['shortid']}&type=tcp#{name}")
         elif p == "vless-ws-tls":
-            path = n["path"].replace("/", "%2F")
+            path = n["path"]
             links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&security=tls&sni={sni}&type=ws&path={path}&host={sni}#{name}")
         elif p == "vless-ws":
-            path = n["path"].replace("/", "%2F")
+            path = n["path"]
             links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&type=ws&path={path}&security=none#{name}")
         elif p == "tuic":
             ins = "&allow_insecure=1" if cert_ss(n, sni) else ""
@@ -1438,10 +1438,10 @@ for h, sni_stored in hosts:
     if q == "vless-reality":
         links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni={sni}&fp=chrome&pbk={n['pubkey']}&sid={n['shortid']}&type=tcp#{name}{suffix}")
     elif q == "vless-ws-tls":
-        path = n["path"].replace("/", "%2F")
+        path = n["path"]
         links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&security=tls&sni={sni}&type=ws&path={path}&host={sni}#{name}{suffix}")
     elif q == "vless-ws":
-        path = n["path"].replace("/", "%2F")
+        path = n["path"]
         links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&type=ws&path={path}&security=none#{name}{suffix}")
     elif q == "tuic":
         ins = "&allow_insecure=1" if cert_ss(n, sni) else ""

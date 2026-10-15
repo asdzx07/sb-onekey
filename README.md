@@ -28,7 +28,7 @@ sudo bash sing-box.sh --onekey     # 零交互，一键出 REALITY 节点
 
 ## 设计要点
 
-- **REALITY 伪装域名**从内置 8 个大厂域名随机挑（aws.amazon.com、www.microsoft.com、dl.google.com 等），不带端口
+- **REALITY 伪装域名**从内置 域名随机挑（aws.amazon.com、www.microsoft.com、dl.google.com 等）
 - **端口防崩溃**：所有添加入口先检查占用（TCP+UDP 双查），被占直接报错退出，配置一行不动；`sing-box check` 校验失败自动回滚
 - **双栈**：入站 `listen ::` 原生双栈；v4/v6 可用**不同域名**（也可以回车用 IP），sni 自动跟随各自域名；v4/v6 域名不同时服务端自动配置多证书（SNI 选择）
 - **证书**：输入域名自动匹配现成证书；三种兜底：手动填路径、现场自签、粘贴 PEM 内容

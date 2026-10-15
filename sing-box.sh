@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.2.1"
+SCRIPT_VER="2.2.2"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -661,7 +661,7 @@ add_reality() {
    "private_key":"$priv","short_id":["$shortid"]}}}
 EOF
 )
-  local base="vless://${uuid}@%s:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${domain}&fp=chrome&pbk=${pub}&sid=${shortid}&type=tcp"
+  local base="vless://${uuid}@%s:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${domain}&fp=chrome&pbk=${pub}&sid=${shortid}&spx=%2F&type=tcp"
   [ -n "$LINK_V4" ] && links+=("$(printf "$base#REALITY-${port}" "$LINK_V4")")
   [ -n "$LINK_V6" ] && links+=("$(printf "$base#REALITY-${port}-v6" "$LINK_V6")")
   local meta hosts_json
@@ -1062,7 +1062,7 @@ def gen_links(n):
         port, name = n["port"], n["name"]
         p = n["proto"]
         if p == "vless-reality":
-            links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni={sni}&fp=chrome&pbk={n['pubkey']}&sid={n['shortid']}&type=tcp#{name}")
+            links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni={sni}&fp=chrome&pbk={n['pubkey']}&sid={n['shortid']}&spx=%2F&type=tcp#{name}")
         elif p == "vless-ws-tls":
             path = n["path"].replace("/", "%2F")
             links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&security=tls&sni={sni}&type=ws&path={path}&host={sni}#{name}")
@@ -1114,7 +1114,8 @@ for n in nodes:
   client-fingerprint: chrome
   reality-opts:
     public-key: {n['pubkey']}
-    short-id: {n['shortid']}""")
+    short-id: {n['shortid']}
+    support-x25519mlkem768: true""")
         elif p in ("vless-ws-tls", "vless-ws"):
             tls = "true" if p == "vless-ws-tls" else "false"
             sn = f"\n  servername: {sni}" if p == "vless-ws-tls" else ""
@@ -1396,7 +1397,7 @@ for h, sni_stored in hosts:
     sni = sni_stored or sni_of(h, default_sni)
     suffix = "-v6" if h == n.get("link_v6") and n.get("link_v4") else ""
     if q == "vless-reality":
-        links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni={sni}&fp=chrome&pbk={n['pubkey']}&sid={n['shortid']}&type=tcp#{name}{suffix}")
+        links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni={sni}&fp=chrome&pbk={n['pubkey']}&sid={n['shortid']}&spx=%2F&type=tcp#{name}{suffix}")
     elif q == "vless-ws-tls":
         path = n["path"].replace("/", "%2F")
         links.append(f"vless://{n['uuid']}@{h}:{port}?encryption=none&security=tls&sni={sni}&type=ws&path={path}&host={sni}#{name}{suffix}")

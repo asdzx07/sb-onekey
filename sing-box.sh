@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.2.6"
+SCRIPT_VER="2.2.7"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -424,10 +424,14 @@ load_node_meta() {
 }
 
 list_node_tags() {
+  # 按创建时间排序（老的在前），方便用户按添加顺序找节点
+  local f tag created
   for f in "$SB_NODES"/*.json; do
     [ -f "$f" ] || continue
-    basename "$f" .json
-  done
+    tag=$(basename "$f" .json)
+    created=$(python3 -c "import json;print(json.load(open('$f')).get('created',''))" 2>/dev/null)
+    printf '%s\t%s\n' "$created" "$tag"
+  done | sort | cut -f2
 }
 
 del_node_meta() { rm -f "$SB_NODES/$1.json"; }

@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.2.4"
+SCRIPT_VER="2.2.5"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -480,20 +480,27 @@ is_domain() {
 }
 
 # 询问 v4/v6 链接地址 → 设置 LINK_V4 / LINK_V6（域名或IP，空=不用）
+# 上次用过的域名会自动记住，回车直接复用
 ask_link_addrs() {
-  local h4 h6 d4 d6
+  local h4 h6 d4 d6 last4 last6
   h4=$(get_public_ip 0 2>/dev/null)
   h6=$(get_public_ip6 2>/dev/null)
-  read -rp "IPv4 链接地址 [输入域名，回车=用IP${h4:+ $h4}]: " d4
+  last4=$(cat "$SB_DIR/last-v4-domain" 2>/dev/null)
+  last6=$(cat "$SB_DIR/last-v6-domain" 2>/dev/null)
+  read -rp "IPv4 链接地址 [输入域名，ip=用IP${h4:+ $h4}，回车=${last4:+$last4}${last4:-用IP${h4:+ $h4}}]: " d4
   d4=$(echo "$d4" | tr -d '\r' | xargs)
-  if [ -n "$d4" ]; then LINK_V4="$d4"
+  if [ -n "$d4" ]; then
+    if [ "$d4" = "ip" ]; then LINK_V4="${h4:-}"
+    else LINK_V4="$d4"; echo "$d4" > "$SB_DIR/last-v4-domain"; fi
+  elif [ -n "$last4" ]; then LINK_V4="$last4"
   elif [ -n "$h4" ]; then LINK_V4="$h4"
   else LINK_V4=""; fi
 
-  read -rp "IPv6 链接地址 [输入域名，n=不生成v6节点，回车=用IP${h6:+ [$h6]}]: " d6
+  read -rp "IPv6 链接地址 [输入域名，n=不生成v6节点，回车=${last6:+$last6}${last6:-用IP${h6:+ [$h6]}}]: " d6
   d6=$(echo "$d6" | tr -d '\r' | xargs)
   if [ "$d6" = "n" ] || [ "$d6" = "N" ]; then LINK_V6=""
-  elif [ -n "$d6" ]; then LINK_V6="$d6"
+  elif [ -n "$d6" ]; then LINK_V6="$d6"; echo "$d6" > "$SB_DIR/last-v6-domain"
+  elif [ -n "$last6" ]; then LINK_V6="$last6"
   elif [ -n "$h6" ]; then LINK_V6="[$h6]"
   else LINK_V6=""; fi
 

@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.2.3"
+SCRIPT_VER="2.2.4"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1361,6 +1361,38 @@ pick_node() {
   echo "$t"
 }
 
+pick_nodes() {
+  # 多选节点 → 每行输出一个 tag（支持 "1 3 5"、"1,3,5"、"all"）
+  local tags i=1 t n input sel
+  mapfile -t tags < <(list_node_tags)
+  [ ${#tags[@]} -eq 0 ] && { warn "还没有节点" >&2; return 1; }
+  for t in "${tags[@]}"; do
+    n=$(python3 -c "import json;print(json.load(open('$SB_NODES/$t.json')).get('name',''))" 2>/dev/null)
+    echo "  $((i++)). $t ($n)" >&2
+  done
+  input=$(read_choice "选择 (可多选，如 1 3 / 1,3，all=全部): ")
+  local nums=()
+  if [ "$input" = "all" ]; then
+    for ((i=0; i<${#tags[@]}; i++)); do nums+=("$((i+1))"); done
+  else
+    for sel in ${input//,/ }; do
+      case "$sel" in
+        ''|*[!0-9]*) warn "忽略无效选项: $sel" >&2 ;;
+        *)
+          if [ "$sel" -ge 1 ] && [ "$sel" -le "${#tags[@]}" ]; then
+            [[ " ${nums[*]} " != *" $sel "* ]] && nums+=("$sel")
+          else
+            warn "忽略无效序号: $sel" >&2
+          fi ;;
+      esac
+    done
+  fi
+  [ ${#nums[@]} -eq 0 ] && { warn "未选择有效节点" >&2; return 1; }
+  for sel in "${nums[@]}"; do
+    echo "${tags[$((sel-1))]}"
+  done
+}
+
 regen_node_links() {
   # $1: tag → 根据元数据重新生成 links 并写回（sni 跟随各自链接域名）
   SB_NODES="$SB_NODES" RETAG="$1" python3 - <<'PYEOF2'
@@ -1532,16 +1564,20 @@ PYEOF4
 }
 
 delete_node() {
-  local tag yn
-  tag=$(pick_node) || return 1
-  read -rp "确认删除 [$tag]？(y/n): " yn
+  local tags tag yn
+  mapfile -t tags < <(pick_nodes) || return 1
+  echo "将删除以下 ${#tags[@]} 个节点：" >&2
+  for tag in "${tags[@]}"; do echo "  - $tag" >&2; done
+  read -rp "确认删除？(y/n): " yn
   [ "$yn" = "y" ] || return 0
   cp "$SB_CONF" "$SB_CONF.bak"
-  json_del_inbound "$tag"
-  del_node_meta "$tag"
+  for tag in "${tags[@]}"; do
+    json_del_inbound "$tag"
+    del_node_meta "$tag"
+  done
   if sb_check_restart; then
     build_subscriptions 2>/dev/null || true
-    ok "已删除 $tag"
+    ok "已删除 ${#tags[@]} 个节点: ${tags[*]}"
   else
     cp "$SB_CONF.bak" "$SB_CONF"; systemctl restart sing-box
     err "删除后校验失败，已回滚"

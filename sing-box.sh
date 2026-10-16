@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.4.3"
+SCRIPT_VER="2.4.4"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -377,8 +377,8 @@ install_webui() {
   fi
 
   info "正在同步最新 WebUI 前后端组件..."
-  if curl -sL --max-time 15 "https://raw.githubusercontent.com/${REPO}/main/webui/index.html" -o "$WEBUI_DIR/index.html" \
-     && curl -sL --max-time 15 "https://raw.githubusercontent.com/${REPO}/main/webui/server.py" -o "$WEBUI_DIR/server.py"; then
+  if curl -sL --max-time 15 "https://raw.githubusercontent.com/${REPO}/main/webui/index.html?t=$(date +%s)" -o "$WEBUI_DIR/index.html" \
+     && curl -sL --max-time 15 "https://raw.githubusercontent.com/${REPO}/main/webui/server.py?t=$(date +%s)" -o "$WEBUI_DIR/server.py"; then
     if [ -d "$src_dir" ]; then
       cp -f "$WEBUI_DIR/index.html" "$WEBUI_DIR/server.py" "$src_dir/" 2>/dev/null || true
     fi
@@ -1839,7 +1839,7 @@ self_update() {
   fi
   info "检查脚本更新（当前 v$SCRIPT_VER）..."
   tmp=$(mktemp)
-  curl -sL --max-time 20 "https://raw.githubusercontent.com/${REPO}/main/sing-box.sh" -o "$tmp" \
+  curl -sL --max-time 20 "https://raw.githubusercontent.com/${REPO}/main/sing-box.sh?t=$(date +%s)" -o "$tmp" \
     || { err "下载失败，请检查网络或仓库地址"; rm -f "$tmp"; return 1; }
   remote_ver=$(grep '^SCRIPT_VER=' "$tmp" | cut -d'"' -f2)
   if [ -z "$remote_ver" ]; then err "远端脚本异常"; rm -f "$tmp"; return 1; fi

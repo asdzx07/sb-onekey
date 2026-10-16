@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.4.7"
+SCRIPT_VER="2.4.8"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1348,7 +1348,7 @@ with open(os.path.join(subdir, "clash.yaml"), "w") as f:
     f.write("\n".join(L) + "\n")
 
 # 3) singbox.json — 完整客户端配置（可直接导入 sing-box 客户端）
-outbounds = []
+node_outbounds = []
 node_tags = []
 for n in nodes:
     port, p = n["port"], n["proto"]
@@ -1359,60 +1359,66 @@ for n in nodes:
             tag = n["name"]
         node_tags.append(tag)
         if p == "vless-reality":
-            outbounds.append({"type": "vless", "tag": tag, "server": h, "server_port": port,
+            node_outbounds.append({"type": "vless", "tag": tag, "server": h, "server_port": port,
                 "uuid": n["uuid"], "flow": "xtls-rprx-vision",
                 "tls": {"enabled": True, "server_name": sni,
                     "utls": {"enabled": True, "fingerprint": "chrome"},
                     "reality": {"enabled": True, "public_key": n["pubkey"], "short_id": n["shortid"]}}})
         elif p == "vless-ws-tls":
-            outbounds.append({"type": "vless", "tag": tag, "server": h, "server_port": port,
+            node_outbounds.append({"type": "vless", "tag": tag, "server": h, "server_port": port,
                 "uuid": n["uuid"],
                 "transport": {"type": "ws", "path": n["path"], "headers": {"Host": sni}},
                 "tls": {"enabled": True, "server_name": sni,
                     "utls": {"enabled": True, "fingerprint": "chrome"},
                     "insecure": cert_ss(n, sni)}})
         elif p == "vless-ws":
-            outbounds.append({"type": "vless", "tag": tag, "server": h, "server_port": port,
+            node_outbounds.append({"type": "vless", "tag": tag, "server": h, "server_port": port,
                 "uuid": n["uuid"], "transport": {"type": "ws", "path": n["path"]}})
         elif p == "tuic":
-            outbounds.append({"type": "tuic", "tag": tag, "server": h, "server_port": port,
+            node_outbounds.append({"type": "tuic", "tag": tag, "server": h, "server_port": port,
                 "uuid": n["uuid"], "password": n["password"],
                 "congestion_control": "bbr", "udp_relay_mode": "native",
                 "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"],
                     "insecure": cert_ss(n, sni)}})
         elif p == "hy2":
-            outbounds.append({"type": "hysteria2", "tag": tag, "server": h, "server_port": port,
+            node_outbounds.append({"type": "hysteria2", "tag": tag, "server": h, "server_port": port,
                 "password": n["password"],
                 "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"],
                     "insecure": cert_ss(n, sni)}})
         elif p == "anytls":
-            outbounds.append({"type": "anytls", "tag": tag, "server": h, "server_port": port,
+            node_outbounds.append({"type": "anytls", "tag": tag, "server": h, "server_port": port,
                 "password": n["password"],
                 "tls": {"enabled": True, "server_name": sni,
                     "utls": {"enabled": True, "fingerprint": "chrome"},
                     "insecure": cert_ss(n, sni)}})
 
-# sing-box 策略组体系
-outbounds.append({"type": "selector", "tag": "🚀 节点选择",
-                  "outbounds": ["♻️ 自动选择", "🎯 全局直连"] + node_tags,
-                  "default": "♻️ 自动选择" if node_tags else "🎯 全局直连"})
-outbounds.append({"type": "urltest", "tag": "♻️ 自动选择",
-                  "outbounds": node_tags,
-                  "url": "https://www.gstatic.com/generate_204",
-                  "interval": "300s", "tolerance": 50})
-outbounds.append({"type": "selector", "tag": "🤖 AI 服务",
-                  "outbounds": ["🚀 节点选择", "♻️ 自动选择", "🎯 全局直连"] + node_tags, "default": "🚀 节点选择"})
-outbounds.append({"type": "selector", "tag": "📹 YouTube",
-                  "outbounds": ["🚀 节点选择", "♻️ 自动选择"] + node_tags, "default": "🚀 节点选择"})
-outbounds.append({"type": "selector", "tag": "📲 Telegram",
-                  "outbounds": ["🚀 节点选择", "♻️ 自动选择"] + node_tags, "default": "🚀 节点选择"})
-outbounds.append({"type": "selector", "tag": "🐱 GitHub",
-                  "outbounds": ["🚀 节点选择", "🎯 全局直连", "♻️ 自动选择"] + node_tags, "default": "🚀 节点选择"})
-outbounds.append({"type": "selector", "tag": "🐟 Bilibili",
-                  "outbounds": ["🎯 全局直连", "🚀 节点选择"], "default": "🎯 全局直连"})
-outbounds.append({"type": "direct", "tag": "🎯 全局直连"})
-outbounds.append({"type": "block", "tag": "🛑 广告拦截"})
-outbounds.append({"type": "dns", "tag": "dns-out"})
+group_outbounds = [
+    {"type": "selector", "tag": "🚀 节点选择",
+     "outbounds": ["♻️ 自动选择", "🎯 全局直连"] + node_tags,
+     "default": "♻️ 自动选择" if node_tags else "🎯 全局直连"},
+    {"type": "urltest", "tag": "♻️ 自动选择",
+     "outbounds": node_tags,
+     "url": "https://www.gstatic.com/generate_204",
+     "interval": "300s", "tolerance": 50},
+    {"type": "selector", "tag": "🤖 AI 服务",
+     "outbounds": ["🚀 节点选择", "♻️ 自动选择", "🎯 全局直连"] + node_tags, "default": "🚀 节点选择"},
+    {"type": "selector", "tag": "📹 YouTube",
+     "outbounds": ["🚀 节点选择", "♻️ 自动选择"] + node_tags, "default": "🚀 节点选择"},
+    {"type": "selector", "tag": "📲 Telegram",
+     "outbounds": ["🚀 节点选择", "♻️ 自动选择"] + node_tags, "default": "🚀 节点选择"},
+    {"type": "selector", "tag": "🐱 GitHub",
+     "outbounds": ["🚀 节点选择", "🎯 全局直连", "♻️ 自动选择"] + node_tags, "default": "🚀 节点选择"},
+    {"type": "selector", "tag": "🐟 Bilibili",
+     "outbounds": ["🎯 全局直连", "🚀 节点选择"], "default": "🎯 全局直连"},
+]
+
+infra_outbounds = [
+    {"type": "direct", "tag": "🎯 全局直连"},
+    {"type": "block", "tag": "🛑 广告拦截"},
+    {"type": "dns", "tag": "dns-out"},
+]
+
+outbounds = group_outbounds + node_outbounds + infra_outbounds
 
 base_srs = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geosite/"
 base_ip_srs = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geoip/"
@@ -1429,7 +1435,9 @@ rule_sets = [
 ]
 
 sb_rules = [
-    {"protocol": "dns", "outbound": "dns-out"},
+    {"protocol": "dns", "action": "hijack-dns"},
+    {"clash_mode": "Direct", "outbound": "🎯 全局直连"},
+    {"clash_mode": "Global", "outbound": "🚀 节点选择"},
     {"rule_set": "geosite-ads", "outbound": "🛑 广告拦截"},
     {"rule_set": "geosite-ai", "outbound": "🤖 AI 服务"},
     {"rule_set": "geosite-youtube", "outbound": "📹 YouTube"},
@@ -1443,17 +1451,25 @@ sb_config = {
     "log": {"level": "info", "timestamp": True},
     "dns": {
         "servers": [
-            {"tag": "dns_proxy", "type": "https", "server": "1.1.1.1", "path": "/dns-query", "detour": "🚀 节点选择"},
-            {"tag": "dns_direct", "type": "https", "server": "223.5.5.5", "path": "/dns-query", "detour": "🎯 全局直连"},
-            {"tag": "dns_fakeip", "type": "fakeip", "inet4_range": "198.18.0.0/15"}
+            {"tag": "dns_fakeip", "type": "fakeip", "inet4_range": "198.18.0.0/15"},
+            {"tag": "dns_proxy", "type": "https", "server": "1.1.1.1", "detour": "🚀 节点选择"},
+            {"tag": "dns_direct", "type": "https", "server": "223.5.5.5", "detour": "🎯 全局直连"},
+            {"tag": "dns_block", "type": "rcode", "rcode": "REFUSED"}
         ],
-        "rules": [{"outbound": "any", "server": "dns_direct"}],
+        "rules": [
+            {"inbound": ["tun-in"], "query_type": ["A", "AAAA"], "server": "dns_fakeip"},
+            {"rule_set": "geosite-ads", "server": "dns_block"},
+            {"rule_set": "geosite-cn", "server": "dns_direct"},
+            {"clash_mode": "Direct", "server": "dns_direct"},
+            {"clash_mode": "Global", "server": "dns_proxy"}
+        ],
         "final": "dns_proxy",
-        "strategy": "prefer_ipv4"
+        "strategy": "prefer_ipv4",
+        "independent_cache": True
     },
     "inbounds": [
-        {"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 1080, "sniff": True},
-        {"type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"], "auto_route": True, "strict_route": True}
+        {"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080, "sniff": True},
+        {"type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"], "auto_route": True, "strict_route": True, "sniff": True}
     ],
     "outbounds": outbounds,
     "route": {
@@ -1461,6 +1477,16 @@ sb_config = {
         "rules": sb_rules,
         "final": "🚀 节点选择",
         "auto_detect_interface": True
+    },
+    "experimental": {
+        "cache_file": {
+            "enabled": True,
+            "store_fakeip": True
+        },
+        "clash_api": {
+            "external_controller": "127.0.0.1:9090",
+            "default_mode": "rule"
+        }
     }
 }
 with open(os.path.join(subdir, "singbox.json"), "w") as f:

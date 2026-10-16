@@ -364,11 +364,53 @@ def gen_singbox(cfg):
     ips = dedup_labels(ips)
     node_tags = [it["label"] for it in ips]
 
-    outbounds = []
     ws_path = clean_ws_path(cfg.get("path"))
-    # 单节点
+
+    # 1. 策略组置顶 (确保客户端 GUI 首屏识别主选择器与分组)
+    group_outbounds = [
+        {
+            "type": "selector", "tag": "🚀 节点选择",
+            "outbounds": ["♻️ 自动选择", "🎯 全局直连"] + node_tags,
+            "default": "♻️ 自动选择" if node_tags else "🎯 全局直连"
+        },
+        {
+            "type": "urltest", "tag": "♻️ 自动选择",
+            "outbounds": node_tags,
+            "url": "https://www.gstatic.com/generate_204",
+            "interval": "300s",
+            "tolerance": 50
+        },
+        {
+            "type": "selector", "tag": "🤖 AI 服务",
+            "outbounds": ["🚀 节点选择", "♻️ 自动选择", "🎯 全局直连"] + node_tags,
+            "default": "🚀 节点选择"
+        },
+        {
+            "type": "selector", "tag": "📹 YouTube",
+            "outbounds": ["🚀 节点选择", "♻️ 自动选择"] + node_tags,
+            "default": "🚀 节点选择"
+        },
+        {
+            "type": "selector", "tag": "📲 Telegram",
+            "outbounds": ["🚀 节点选择", "♻️ 自动选择"] + node_tags,
+            "default": "🚀 节点选择"
+        },
+        {
+            "type": "selector", "tag": "🐱 GitHub",
+            "outbounds": ["🚀 节点选择", "🎯 全局直连", "♻️ 自动选择"] + node_tags,
+            "default": "🚀 节点选择"
+        },
+        {
+            "type": "selector", "tag": "🐟 Bilibili",
+            "outbounds": ["🎯 全局直连", "🚀 节点选择"],
+            "default": "🎯 全局直连"
+        },
+    ]
+
+    # 2. 单节点列表
+    node_outbounds = []
     for it in ips:
-        outbounds.append({
+        node_outbounds.append({
             "type": "vless", "tag": it["label"],
             "server": it["ip"], "server_port": int(it["port"]),
             "uuid": cfg["uuid"],
@@ -378,47 +420,14 @@ def gen_singbox(cfg):
                           "headers": {"Host": cfg["host"]}},
         })
 
-    # 策略组 (参考 sublink 体系)
-    outbounds.append({
-        "type": "selector", "tag": "🚀 节点选择",
-        "outbounds": ["♻️ 自动选择", "🎯 全局直连"] + node_tags,
-        "default": "♻️ 自动选择" if node_tags else "🎯 全局直连"
-    })
-    outbounds.append({
-        "type": "urltest", "tag": "♻️ 自动选择",
-        "outbounds": node_tags,
-        "url": "https://www.gstatic.com/generate_204",
-        "interval": "300s",
-        "tolerance": 50
-    })
-    outbounds.append({
-        "type": "selector", "tag": "🤖 AI 服务",
-        "outbounds": ["🚀 节点选择", "♻️ 自动选择", "🎯 全局直连"] + node_tags,
-        "default": "🚀 节点选择"
-    })
-    outbounds.append({
-        "type": "selector", "tag": "📹 YouTube",
-        "outbounds": ["🚀 节点选择", "♻️ 自动选择"] + node_tags,
-        "default": "🚀 节点选择"
-    })
-    outbounds.append({
-        "type": "selector", "tag": "📲 Telegram",
-        "outbounds": ["🚀 节点选择", "♻️ 自动选择"] + node_tags,
-        "default": "🚀 节点选择"
-    })
-    outbounds.append({
-        "type": "selector", "tag": "🐱 GitHub",
-        "outbounds": ["🚀 节点选择", "🎯 全局直连", "♻️ 自动选择"] + node_tags,
-        "default": "🚀 节点选择"
-    })
-    outbounds.append({
-        "type": "selector", "tag": "🐟 Bilibili",
-        "outbounds": ["🎯 全局直连", "🚀 节点选择"],
-        "default": "🎯 全局直连"
-    })
-    outbounds.append({"type": "direct", "tag": "🎯 全局直连"})
-    outbounds.append({"type": "block", "tag": "🛑 广告拦截"})
-    outbounds.append({"type": "dns", "tag": "dns-out"})
+    # 3. 基础出站
+    infra_outbounds = [
+        {"type": "direct", "tag": "🎯 全局直连"},
+        {"type": "block", "tag": "🛑 广告拦截"},
+        {"type": "dns", "tag": "dns-out"}
+    ]
+
+    outbounds = group_outbounds + node_outbounds + infra_outbounds
 
     base_site = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geosite/"
     base_ip = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geoip/"
@@ -435,7 +444,9 @@ def gen_singbox(cfg):
     ]
 
     rules = [
-        {"protocol": "dns", "outbound": "dns-out"},
+        {"protocol": "dns", "action": "hijack-dns"},
+        {"clash_mode": "Direct", "outbound": "🎯 全局直连"},
+        {"clash_mode": "Global", "outbound": "🚀 节点选择"},
         {"rule_set": "geosite-ads", "outbound": "🛑 广告拦截"},
         {"rule_set": "geosite-ai", "outbound": "🤖 AI 服务"},
         {"rule_set": "geosite-youtube", "outbound": "📹 YouTube"},
@@ -449,19 +460,25 @@ def gen_singbox(cfg):
         "log": {"level": "info", "timestamp": True},
         "dns": {
             "servers": [
-                {"tag": "dns_proxy", "type": "https", "server": "1.1.1.1", "path": "/dns-query", "detour": "🚀 节点选择"},
-                {"tag": "dns_direct", "type": "https", "server": "223.5.5.5", "path": "/dns-query", "detour": "🎯 全局直连"},
-                {"tag": "dns_fakeip", "type": "fakeip", "inet4_range": "198.18.0.0/15"}
+                {"tag": "dns_fakeip", "type": "fakeip", "inet4_range": "198.18.0.0/15"},
+                {"tag": "dns_proxy", "type": "https", "server": "1.1.1.1", "detour": "🚀 节点选择"},
+                {"tag": "dns_direct", "type": "https", "server": "223.5.5.5", "detour": "🎯 全局直连"},
+                {"tag": "dns_block", "type": "rcode", "rcode": "REFUSED"}
             ],
             "rules": [
-                {"outbound": "any", "server": "dns_direct"}
+                {"inbound": ["tun-in"], "query_type": ["A", "AAAA"], "server": "dns_fakeip"},
+                {"rule_set": "geosite-ads", "server": "dns_block"},
+                {"rule_set": "geosite-cn", "server": "dns_direct"},
+                {"clash_mode": "Direct", "server": "dns_direct"},
+                {"clash_mode": "Global", "server": "dns_proxy"}
             ],
             "final": "dns_proxy",
-            "strategy": "prefer_ipv4"
+            "strategy": "prefer_ipv4",
+            "independent_cache": True
         },
         "inbounds": [
-            {"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 1080, "sniff": True},
-            {"type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"], "auto_route": True, "strict_route": True}
+            {"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080, "sniff": True},
+            {"type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"], "auto_route": True, "strict_route": True, "sniff": True}
         ],
         "outbounds": outbounds,
         "route": {
@@ -469,6 +486,16 @@ def gen_singbox(cfg):
             "rules": rules,
             "final": "🚀 节点选择",
             "auto_detect_interface": True
+        },
+        "experimental": {
+            "cache_file": {
+                "enabled": True,
+                "store_fakeip": True
+            },
+            "clash_api": {
+                "external_controller": "127.0.0.1:9090",
+                "default_mode": "rule"
+            }
         }
     }
     return json.dumps(sb_config, ensure_ascii=False, indent=2)

@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.4.9"
+SCRIPT_VER="2.5.0"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1413,9 +1413,7 @@ group_outbounds = [
 ]
 
 infra_outbounds = [
-    {"type": "direct", "tag": "🎯 全局直连"},
-    {"type": "block", "tag": "🛑 广告拦截"},
-    {"type": "dns", "tag": "dns-out"},
+    {"type": "direct", "tag": "🎯 全局直连"}
 ]
 
 outbounds = group_outbounds + node_outbounds + infra_outbounds
@@ -1435,10 +1433,9 @@ rule_sets = [
 ]
 
 sb_rules = [
+    {"action": "sniff"},
     {"protocol": "dns", "action": "hijack-dns"},
-    {"clash_mode": "Direct", "outbound": "🎯 全局直连"},
-    {"clash_mode": "Global", "outbound": "🚀 节点选择"},
-    {"rule_set": "geosite-ads", "outbound": "🛑 广告拦截"},
+    {"rule_set": "geosite-ads", "action": "reject"},
     {"rule_set": "geosite-ai", "outbound": "🤖 AI 服务"},
     {"rule_set": "geosite-youtube", "outbound": "📹 YouTube"},
     {"rule_set": "geosite-telegram", "outbound": "📲 Telegram"},
@@ -1451,23 +1448,35 @@ sb_config = {
     "log": {"level": "info", "timestamp": True},
     "dns": {
         "servers": [
-            {"tag": "dns_fakeip", "type": "fakeip", "inet4_range": "198.18.0.0/15"},
-            {"tag": "dns_proxy", "type": "https", "server": "1.1.1.1", "detour": "🚀 节点选择"},
-            {"tag": "dns_direct", "type": "https", "server": "223.5.5.5", "detour": "🎯 全局直连"}
+            {
+                "tag": "dns_proxy", "type": "https",
+                "server": "1.1.1.1", "path": "/dns-query",
+                "tls": {"enabled": True, "server_name": "cloudflare-dns.com"},
+                "detour": "🚀 节点选择"
+            },
+            {
+                "tag": "dns_direct", "type": "https",
+                "server": "223.5.5.5", "path": "/dns-query",
+                "tls": {"enabled": True, "server_name": "dns.alidns.com"},
+                "detour": "🎯 全局直连"
+            },
+            {
+                "tag": "dns_fakeip", "type": "fakeip",
+                "inet4_range": "198.18.0.0/15"
+            }
         ],
         "rules": [
-            {"inbound": ["tun-in"], "query_type": ["A", "AAAA"], "server": "dns_fakeip"},
             {"rule_set": "geosite-ads", "action": "reject"},
             {"rule_set": "geosite-cn", "server": "dns_direct"},
-            {"clash_mode": "Direct", "server": "dns_direct"},
-            {"clash_mode": "Global", "server": "dns_proxy"}
+            {"query_type": ["AAAA"], "action": "predefined", "rcode": "NOERROR"},
+            {"query_type": ["A"], "server": "dns_fakeip"}
         ],
         "final": "dns_proxy",
         "strategy": "prefer_ipv4"
     },
     "inbounds": [
-        {"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080, "sniff": True},
-        {"type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"], "auto_route": True, "strict_route": True, "sniff": True}
+        {"type": "mixed", "tag": "mixed-in", "listen": "0.0.0.0", "listen_port": 2080},
+        {"type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"], "auto_route": True, "strict_route": True}
     ],
     "outbounds": outbounds,
     "route": {

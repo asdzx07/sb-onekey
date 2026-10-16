@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.2.7"
+SCRIPT_VER="2.3.0"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -359,6 +359,40 @@ EOF
   systemctl enable sing-box >/dev/null 2>&1
   enable_bbr v1
   ok "sing-box $ver 安装完成"
+  install_webui
+}
+
+# ---------- WebUI（优选 IP 订阅生成器） ----------
+WEBUI_DIR="/opt/pref-sub"
+WEBUI_PORT="13530"
+install_webui() {
+  # 从脚本自带 webui/ 目录安装（仓库合并后自带，无需再 clone）
+  local src_dir
+  src_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/webui"
+  [ -d "$src_dir" ] || { warn "未找到 webui 目录，跳过 WebUI 安装"; return 0; }
+  mkdir -p "$WEBUI_DIR"
+  cp -f "$src_dir/index.html" "$src_dir/server.py" "$WEBUI_DIR/"
+  cat > /etc/systemd/system/pref-sub.service <<EOF
+[Unit]
+Description=Pref-Sub Web UI
+After=network.target
+[Service]
+Type=simple
+WorkingDirectory=$WEBUI_DIR
+ExecStart=/usr/bin/python3 $WEBUI_DIR/server.py
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable pref-sub >/dev/null 2>&1
+  systemctl restart pref-sub >/dev/null 2>&1
+  ok "WebUI 已安装: $(webui_url)"
+}
+webui_url() {
+  local ip
+  ip=$(get_public_ip 0 2>/dev/null)
+  echo "http://${ip:-<本机IP>}:$WEBUI_PORT"
 }
 
 # ---------- JSON 操作 ----------
@@ -1872,6 +1906,7 @@ main_menu() {
     _cyan "========== sing-box 一键脚本 v${SCRIPT_VER} =========="
     if [ -x "$SB_BIN" ]; then
       echo "sing-box: $("$SB_BIN" version 2>/dev/null | head -1) ｜ 状态: $(systemctl is-active sing-box 2>/dev/null)"
+      echo "WebUI: $(webui_url) ｜ 状态: $(systemctl is-active pref-sub 2>/dev/null)"
     else
       echo "sing-box: 未安装"
     fi
@@ -1886,6 +1921,7 @@ main_menu() {
     echo "  9. 网络优化（BBR / BBRv3）"
     echo " 10. 脚本自更新"
     echo " 11. 卸载"
+    echo " 12. WebUI 管理（优选 IP 订阅）"
     echo "  0. 退出"
     n=$(read_choice "选择: ")
     case "$n" in
@@ -1900,7 +1936,29 @@ main_menu() {
       9) bbr_menu ;;
       10) self_update ;;
       11) uninstall_all ;;
+      12) webui_menu ;;
       0) exit 0 ;;
+      *) warn "无效选择" ;;
+    esac
+  done
+}
+
+webui_menu() {
+  while :; do
+    echo ""
+    _cyan "===== WebUI 管理（优选 IP 订阅生成器）====="
+    echo "地址: $(webui_url)"
+    echo "状态: $(systemctl is-active pref-sub 2>/dev/null)"
+    echo "  1. 重装/更新 WebUI"
+    echo "  2. 重启 WebUI"
+    echo "  3. 查看状态"
+    echo "  0. 返回"
+    n=$(read_choice "选择: ")
+    case "$n" in
+      1) install_webui ;;
+      2) systemctl restart pref-sub; ok "已重启: $(webui_url)" ;;
+      3) systemctl status pref-sub --no-pager | head -12 ;;
+      0) return ;;
       *) warn "无效选择" ;;
     esac
   done

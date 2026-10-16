@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.4.0"
+SCRIPT_VER="2.4.1"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -366,17 +366,27 @@ EOF
 WEBUI_DIR="/opt/pref-sub"
 WEBUI_PORT="13530"
 install_webui() {
-  # 优先从脚本同级 webui/ 目录安装；若为单脚本运行则从 GitHub 远程拉取
-  local src_dir
-  src_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/webui"
+  local root_dir src_dir
+  root_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  src_dir="$root_dir/webui"
   mkdir -p "$WEBUI_DIR"
-  if [ -d "$src_dir" ] && [ -f "$src_dir/index.html" ] && [ -f "$src_dir/server.py" ]; then
+
+  # 若位于 git 仓库中，顺便静默 git pull
+  if [ -d "$root_dir/.git" ] && command -v git >/dev/null 2>&1; then
+    (cd "$root_dir" && git pull --quiet 2>/dev/null || true)
+  fi
+
+  info "正在同步最新 WebUI 前后端组件..."
+  if curl -sL --max-time 15 "https://raw.githubusercontent.com/${REPO}/main/webui/index.html" -o "$WEBUI_DIR/index.html" \
+     && curl -sL --max-time 15 "https://raw.githubusercontent.com/${REPO}/main/webui/server.py" -o "$WEBUI_DIR/server.py"; then
+    if [ -d "$src_dir" ]; then
+      cp -f "$WEBUI_DIR/index.html" "$WEBUI_DIR/server.py" "$src_dir/" 2>/dev/null || true
+    fi
+  elif [ -d "$src_dir" ] && [ -f "$src_dir/index.html" ] && [ -f "$src_dir/server.py" ]; then
     cp -f "$src_dir/index.html" "$src_dir/server.py" "$WEBUI_DIR/"
   else
-    info "正在从 GitHub 获取最新 WebUI 前后端组件..."
-    curl -sL --max-time 15 "https://raw.githubusercontent.com/${REPO}/main/webui/index.html" -o "$WEBUI_DIR/index.html" \
-      && curl -sL --max-time 15 "https://raw.githubusercontent.com/${REPO}/main/webui/server.py" -o "$WEBUI_DIR/server.py" \
-      || { warn "获取 WebUI 文件失败，请检查网络"; return 1; }
+    warn "获取 WebUI 文件失败，请检查网络"
+    return 1
   fi
   cat > /etc/systemd/system/pref-sub.service <<EOF
 [Unit]
@@ -1823,15 +1833,22 @@ self_update() {
     || { err "下载失败，请检查网络或仓库地址"; rm -f "$tmp"; return 1; }
   remote_ver=$(grep '^SCRIPT_VER=' "$tmp" | cut -d'"' -f2)
   if [ -z "$remote_ver" ]; then err "远端脚本异常"; rm -f "$tmp"; return 1; fi
-  if [ "$remote_ver" = "$SCRIPT_VER" ]; then ok "已是最新 (v$SCRIPT_VER)"; rm -f "$tmp"; return 0; fi
-  info "发现新版 v$remote_ver"
-  bash -n "$tmp" || { err "新版脚本语法校验失败，放弃更新"; rm -f "$tmp"; return 1; }
-  cp "$tmp" "$0"; chmod +x "$0"; rm -f "$tmp"
-  if [ -d "$WEBUI_DIR" ]; then
-    info "正在同步更新 WebUI 组件..."
-    install_webui
+
+  if [ "$remote_ver" = "$SCRIPT_VER" ]; then
+    ok "脚本已是最新版 (v$SCRIPT_VER)"
+    rm -f "$tmp"
+  else
+    info "发现新版脚本 v$remote_ver"
+    bash -n "$tmp" || { err "新版脚本语法校验失败，放弃更新"; rm -f "$tmp"; return 1; }
+    cp "$tmp" "$0"; chmod +x "$0"; rm -f "$tmp"
+    ok "脚本已更新至 v$remote_ver"
   fi
-  ok "已更新到 v$remote_ver，请重新运行脚本"
+
+  # 无论脚本是否有版本差异，自更新均同时自动重装/更新 WebUI
+  info "正在同步自动重装/更新 WebUI（优选 IP 订阅生成器）..."
+  install_webui
+
+  ok "脚本与 WebUI 均已更新完毕！"
 }
 
 uninstall_all() {
@@ -1929,7 +1946,7 @@ main_menu() {
     echo "  7. 证书管理"
     echo "  8. 更新 sing-box 内核"
     echo "  9. 网络优化（BBR / BBRv3）"
-    echo " 10. 脚本自更新"
+    echo " 10. 脚本自更新（同时更新 WebUI）"
     echo " 11. 卸载"
     echo " 12. WebUI 管理（优选 IP 订阅）"
     echo "  0. 退出"

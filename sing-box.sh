@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.5.4"
+SCRIPT_VER="2.5.5"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1423,14 +1423,14 @@ base_srs = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw
 base_ip_srs = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geoip/"
 
 rule_sets = [
-    {"tag": "geosite-ads", "type": "remote", "format": "binary", "url": f"{base_srs}category-ads-all.srs", "download_detour": "🚀 节点选择"},
-    {"tag": "geosite-ai", "type": "remote", "format": "binary", "url": f"{base_srs}category-ai-!cn.srs", "download_detour": "🚀 节点选择"},
-    {"tag": "geosite-youtube", "type": "remote", "format": "binary", "url": f"{base_srs}youtube.srs", "download_detour": "🚀 节点选择"},
-    {"tag": "geosite-telegram", "type": "remote", "format": "binary", "url": f"{base_srs}telegram.srs", "download_detour": "🚀 节点选择"},
-    {"tag": "geosite-github", "type": "remote", "format": "binary", "url": f"{base_srs}github.srs", "download_detour": "🚀 节点选择"},
-    {"tag": "geosite-cn", "type": "remote", "format": "binary", "url": f"{base_srs}geolocation-cn.srs", "download_detour": "🎯 全局直连"},
-    {"tag": "geoip-cn", "type": "remote", "format": "binary", "url": f"{base_ip_srs}cn.srs", "download_detour": "🎯 全局直连"},
-    {"tag": "geoip-private", "type": "remote", "format": "binary", "url": f"{base_ip_srs}private.srs", "download_detour": "🎯 全局直连"},
+    {"tag": "geosite-ads", "type": "remote", "format": "binary", "url": f"{base_srs}category-ads-all.srs", "http_client": "http-proxy"},
+    {"tag": "geosite-ai", "type": "remote", "format": "binary", "url": f"{base_srs}category-ai-!cn.srs", "http_client": "http-proxy"},
+    {"tag": "geosite-youtube", "type": "remote", "format": "binary", "url": f"{base_srs}youtube.srs", "http_client": "http-proxy"},
+    {"tag": "geosite-telegram", "type": "remote", "format": "binary", "url": f"{base_srs}telegram.srs", "http_client": "http-proxy"},
+    {"tag": "geosite-github", "type": "remote", "format": "binary", "url": f"{base_srs}github.srs", "http_client": "http-proxy"},
+    {"tag": "geosite-cn", "type": "remote", "format": "binary", "url": f"{base_srs}geolocation-cn.srs", "http_client": "http-direct"},
+    {"tag": "geoip-cn", "type": "remote", "format": "binary", "url": f"{base_ip_srs}cn.srs", "http_client": "http-direct"},
+    {"tag": "geoip-private", "type": "remote", "format": "binary", "url": f"{base_ip_srs}private.srs", "http_client": "http-direct"},
 ]
 
 sb_rules = [
@@ -1481,11 +1481,16 @@ sb_config = {
     "outbounds": outbounds,
     "route": {
         "default_domain_resolver": "dns_direct",
+        "default_http_client": "http-proxy",
         "rule_set": rule_sets,
         "rules": sb_rules,
         "final": "🚀 节点选择",
         "auto_detect_interface": True
     },
+    "http_clients": [
+        {"tag": "http-proxy", "detour": "🚀 节点选择"},
+        {"tag": "http-direct"}
+    ],
     "experimental": {
         "cache_file": {
             "enabled": True,

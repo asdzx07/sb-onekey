@@ -433,14 +433,14 @@ def gen_singbox(cfg):
     base_ip = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geoip/"
 
     rule_sets = [
-        {"tag": "geosite-ads", "type": "remote", "format": "binary", "url": f"{base_site}category-ads-all.srs", "download_detour": "🚀 节点选择"},
-        {"tag": "geosite-ai", "type": "remote", "format": "binary", "url": f"{base_site}category-ai-!cn.srs", "download_detour": "🚀 节点选择"},
-        {"tag": "geosite-youtube", "type": "remote", "format": "binary", "url": f"{base_site}youtube.srs", "download_detour": "🚀 节点选择"},
-        {"tag": "geosite-telegram", "type": "remote", "format": "binary", "url": f"{base_site}telegram.srs", "download_detour": "🚀 节点选择"},
-        {"tag": "geosite-github", "type": "remote", "format": "binary", "url": f"{base_site}github.srs", "download_detour": "🚀 节点选择"},
-        {"tag": "geosite-cn", "type": "remote", "format": "binary", "url": f"{base_site}geolocation-cn.srs", "download_detour": "🎯 全局直连"},
-        {"tag": "geoip-cn", "type": "remote", "format": "binary", "url": f"{base_ip}cn.srs", "download_detour": "🎯 全局直连"},
-        {"tag": "geoip-private", "type": "remote", "format": "binary", "url": f"{base_ip}private.srs", "download_detour": "🎯 全局直连"},
+        {"tag": "geosite-ads", "type": "remote", "format": "binary", "url": f"{base_site}category-ads-all.srs", "http_client": "http-proxy"},
+        {"tag": "geosite-ai", "type": "remote", "format": "binary", "url": f"{base_site}category-ai-!cn.srs", "http_client": "http-proxy"},
+        {"tag": "geosite-youtube", "type": "remote", "format": "binary", "url": f"{base_site}youtube.srs", "http_client": "http-proxy"},
+        {"tag": "geosite-telegram", "type": "remote", "format": "binary", "url": f"{base_site}telegram.srs", "http_client": "http-proxy"},
+        {"tag": "geosite-github", "type": "remote", "format": "binary", "url": f"{base_site}github.srs", "http_client": "http-proxy"},
+        {"tag": "geosite-cn", "type": "remote", "format": "binary", "url": f"{base_site}geolocation-cn.srs", "http_client": "http-direct"},
+        {"tag": "geoip-cn", "type": "remote", "format": "binary", "url": f"{base_ip}cn.srs", "http_client": "http-direct"},
+        {"tag": "geoip-private", "type": "remote", "format": "binary", "url": f"{base_ip}private.srs", "http_client": "http-direct"},
     ]
 
     # 对齐 sublink：嗅探与 DNS 劫持均通过规则动作（Action）处理，不再依赖 inbound 旧字段
@@ -492,11 +492,16 @@ def gen_singbox(cfg):
         "outbounds": outbounds,
         "route": {
             "default_domain_resolver": "dns_direct",
+            "default_http_client": "http-proxy",
             "rule_set": rule_sets,
             "rules": rules,
             "final": "🚀 节点选择",
             "auto_detect_interface": True
         },
+        "http_clients": [
+            {"tag": "http-proxy", "detour": "🚀 节点选择"},
+            {"tag": "http-direct"}
+        ],
         "experimental": {
             "cache_file": {
                 "enabled": True,

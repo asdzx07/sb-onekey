@@ -166,7 +166,34 @@ def gen_base64(cfg):
 def gen_clash(cfg):
     links, ips = build_vless_links(cfg)
     ips = dedup_labels(ips)
-    out = ["proxies:"]
+    node_names = [it["label"] for it in ips]
+    sub_title = cfg.get("subName", "优选")
+
+    out = [
+        "port: 7890",
+        "socks-port: 7891",
+        "allow-lan: false",
+        "mode: rule",
+        "log-level: info",
+        "unified-delay: true",
+        "tcp-concurrent: true",
+        "dns:",
+        "  enable: true",
+        "  ipv6: false",
+        "  enhanced-mode: fake-ip",
+        "  fake-ip-range: 198.18.0.1/16",
+        "  default-nameserver:",
+        "    - 223.5.5.5",
+        "    - 119.29.29.29",
+        "  nameserver:",
+        "    - https://223.5.5.5/dns-query",
+        "    - https://119.29.29.29/dns-query",
+        "  fallback:",
+        "    - https://1.1.1.1/dns-query",
+        "    - https://8.8.8.8/dns-query",
+        "",
+        "proxies:",
+    ]
     for it in ips:
         out.append(f'  - name: "{it["label"]}"')
         out.append("    type: vless")
@@ -181,24 +208,154 @@ def gen_clash(cfg):
         out.append(f"      path: {cfg.get('path') or '/'}")
         out.append("      headers:")
         out.append(f"        Host: {cfg['host']}")
+
+    # 策略组设计 (参考 sublink 体系)
     out.append("")
     out.append("proxy-groups:")
-    out.append(f'  - name: "{cfg.get("subName", "优选")}"')
-    out.append("    type: url-test")
+    # 1. 🚀 节点选择 (主选)
+    out.append("  - name: \"🚀 节点选择\"")
+    out.append("    type: select")
     out.append("    proxies:")
-    for it in ips:
-        out.append(f'      - "{it["label"]}"')
+    out.append(f'      - "♻️ 自动选择"')
+    out.append(f'      - "🎯 全局直连"')
+    for pn in node_names:
+        out.append(f'      - "{pn}"')
+
+    # 2. ♻️ 自动选择 (url-test)
+    out.append("  - name: \"♻️ 自动选择\"")
+    out.append("    type: url-test")
     out.append("    url: https://www.gstatic.com/generate_204")
     out.append("    interval: 300")
+    out.append("    tolerance: 50")
+    out.append("    proxies:")
+    for pn in node_names:
+        out.append(f'      - "{pn}"')
+
+    # 3. 🤖 AI 服务
+    out.append("  - name: \"🤖 AI 服务\"")
+    out.append("    type: select")
+    out.append("    proxies:")
+    out.append("      - \"🚀 节点选择\"")
+    out.append("      - \"♻️ 自动选择\"")
+    out.append("      - \"🎯 全局直连\"")
+    for pn in node_names:
+        out.append(f'      - "{pn}"')
+
+    # 4. 📹 YouTube
+    out.append("  - name: \"📹 YouTube\"")
+    out.append("    type: select")
+    out.append("    proxies:")
+    out.append("      - \"🚀 节点选择\"")
+    out.append("      - \"♻️ 自动选择\"")
+    for pn in node_names:
+        out.append(f'      - "{pn}"')
+
+    # 5. 📲 Telegram
+    out.append("  - name: \"📲 Telegram\"")
+    out.append("    type: select")
+    out.append("    proxies:")
+    out.append("      - \"🚀 节点选择\"")
+    out.append("      - \"♻️ 自动选择\"")
+    for pn in node_names:
+        out.append(f'      - "{pn}"')
+
+    # 6. 🐱 GitHub
+    out.append("  - name: \"🐱 GitHub\"")
+    out.append("    type: select")
+    out.append("    proxies:")
+    out.append("      - \"🚀 节点选择\"")
+    out.append("      - \"🎯 全局直连\"")
+    out.append("      - \"♻️ 自动选择\"")
+    for pn in node_names:
+        out.append(f'      - "{pn}"')
+
+    # 7. 🐟 Bilibili
+    out.append("  - name: \"🐟 Bilibili\"")
+    out.append("    type: select")
+    out.append("    proxies:")
+    out.append("      - \"🎯 全局直连\"")
+    out.append("      - \"🚀 节点选择\"")
+
+    # 8. 🛑 广告拦截
+    out.append("  - name: \"🛑 广告拦截\"")
+    out.append("    type: select")
+    out.append("    proxies:")
+    out.append("      - \"REJECT\"")
+    out.append("      - \"🎯 全局直连\"")
+
+    # 9. 🎯 全局直连
+    out.append("  - name: \"🎯 全局直连\"")
+    out.append("    type: select")
+    out.append("    proxies:")
+    out.append("      - \"DIRECT\"")
+
+    # 10. 🐟 漏网之鱼
+    out.append("  - name: \"🐟 漏网之鱼\"")
+    out.append("    type: select")
+    out.append("    proxies:")
+    out.append("      - \"🚀 节点选择\"")
+    out.append("      - \"🎯 全局直连\"")
+    out.append("      - \"♻️ 自动选择\"")
+
+    # 规则集定义 (MetaCubeX .mrs 二进制规则)
+    base_site = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/"
+    base_ip = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geoip/"
+
+    out.append("")
+    out.append("rule-providers:")
+    for rule_tag, file_name, btype in [
+        ("category-ads-all", "category-ads-all.mrs", "domain"),
+        ("category-ai", "category-ai-!cn.mrs", "domain"),
+        ("youtube", "youtube.mrs", "domain"),
+        ("google", "google.mrs", "domain"),
+        ("telegram", "telegram.mrs", "domain"),
+        ("github", "github.mrs", "domain"),
+        ("bilibili", "bilibili.mrs", "domain"),
+        ("cn-site", "geolocation-cn.mrs", "domain"),
+    ]:
+        out.append(f"  {rule_tag}:")
+        out.append("    type: http")
+        out.append(f"    behavior: {btype}")
+        out.append("    format: mrs")
+        out.append(f"    url: \"{base_site}{file_name}\"")
+        out.append(f"    path: ./rules/{rule_tag}.mrs")
+        out.append("    interval: 86400")
+
+    for rule_tag, file_name in [
+        ("cn-ip", "cn.mrs"),
+        ("private-ip", "private.mrs"),
+    ]:
+        out.append(f"  {rule_tag}:")
+        out.append("    type: http")
+        out.append("    behavior: ipcidr")
+        out.append("    format: mrs")
+        out.append(f"    url: \"{base_ip}{file_name}\"")
+        out.append(f"    path: ./rules/{rule_tag}.mrs")
+        out.append("    interval: 86400")
+
     out.append("")
     out.append("rules:")
-    out.append(f'  - MATCH,{cfg.get("subName", "优选")}')
+    out.append("  - RULE-SET,category-ads-all,🛑 广告拦截")
+    out.append("  - RULE-SET,category-ai,🤖 AI 服务")
+    out.append("  - RULE-SET,youtube,📹 YouTube")
+    out.append("  - RULE-SET,google,🚀 节点选择")
+    out.append("  - RULE-SET,telegram,📲 Telegram")
+    out.append("  - RULE-SET,github,🐱 GitHub")
+    out.append("  - RULE-SET,bilibili,🐟 Bilibili")
+    out.append("  - RULE-SET,cn-site,🎯 全局直连")
+    out.append("  - RULE-SET,private-ip,🎯 全局直连,no-resolve")
+    out.append("  - RULE-SET,cn-ip,🎯 全局直连")
+    out.append("  - GEOIP,CN,🎯 全局直连")
+    out.append("  - MATCH,🐟 漏网之鱼")
     return "\n".join(out)
 
 def gen_singbox(cfg):
     links, ips = build_vless_links(cfg)
     ips = dedup_labels(ips)
+    node_tags = [it["label"] for it in ips]
+
     outbounds = []
+    # 单节点
     for it in ips:
         outbounds.append({
             "type": "vless", "tag": it["label"],
@@ -209,12 +366,101 @@ def gen_singbox(cfg):
             "transport": {"type": "ws", "path": cfg.get("path") or "/",
                           "headers": {"Host": cfg["host"]}},
         })
-    outbounds.append({"type": "direct", "tag": "direct"})
-    return json.dumps({
-        "log": {"level": "info"},
+
+    # 策略组 (参考 sublink 体系)
+    outbounds.append({
+        "type": "selector", "tag": "🚀 节点选择",
+        "outbounds": ["♻️ 自动选择", "🎯 全局直连"] + node_tags,
+        "default": "♻️ 自动选择" if node_tags else "🎯 全局直连"
+    })
+    outbounds.append({
+        "type": "urltest", "tag": "♻️ 自动选择",
+        "outbounds": node_tags,
+        "url": "https://www.gstatic.com/generate_204",
+        "interval": "300s",
+        "tolerance": 50
+    })
+    outbounds.append({
+        "type": "selector", "tag": "🤖 AI 服务",
+        "outbounds": ["🚀 节点选择", "♻️ 自动选择", "🎯 全局直连"] + node_tags,
+        "default": "🚀 节点选择"
+    })
+    outbounds.append({
+        "type": "selector", "tag": "📹 YouTube",
+        "outbounds": ["🚀 节点选择", "♻️ 自动选择"] + node_tags,
+        "default": "🚀 节点选择"
+    })
+    outbounds.append({
+        "type": "selector", "tag": "📲 Telegram",
+        "outbounds": ["🚀 节点选择", "♻️ 自动选择"] + node_tags,
+        "default": "🚀 节点选择"
+    })
+    outbounds.append({
+        "type": "selector", "tag": "🐱 GitHub",
+        "outbounds": ["🚀 节点选择", "🎯 全局直连", "♻️ 自动选择"] + node_tags,
+        "default": "🚀 节点选择"
+    })
+    outbounds.append({
+        "type": "selector", "tag": "🐟 Bilibili",
+        "outbounds": ["🎯 全局直连", "🚀 节点选择"],
+        "default": "🎯 全局直连"
+    })
+    outbounds.append({"type": "direct", "tag": "🎯 全局直连"})
+    outbounds.append({"type": "block", "tag": "🛑 广告拦截"})
+    outbounds.append({"type": "dns", "tag": "dns-out"})
+
+    base_site = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geosite/"
+    base_ip = "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geoip/"
+
+    rule_sets = [
+        {"tag": "geosite-ads", "type": "remote", "format": "binary", "url": f"{base_site}category-ads-all.srs", "download_detour": "🚀 节点选择"},
+        {"tag": "geosite-ai", "type": "remote", "format": "binary", "url": f"{base_site}category-ai-!cn.srs", "download_detour": "🚀 节点选择"},
+        {"tag": "geosite-youtube", "type": "remote", "format": "binary", "url": f"{base_site}youtube.srs", "download_detour": "🚀 节点选择"},
+        {"tag": "geosite-telegram", "type": "remote", "format": "binary", "url": f"{base_site}telegram.srs", "download_detour": "🚀 节点选择"},
+        {"tag": "geosite-github", "type": "remote", "format": "binary", "url": f"{base_site}github.srs", "download_detour": "🚀 节点选择"},
+        {"tag": "geosite-cn", "type": "remote", "format": "binary", "url": f"{base_site}geolocation-cn.srs", "download_detour": "🎯 全局直连"},
+        {"tag": "geoip-cn", "type": "remote", "format": "binary", "url": f"{base_ip}cn.srs", "download_detour": "🎯 全局直连"},
+        {"tag": "geoip-private", "type": "remote", "format": "binary", "url": f"{base_ip}private.srs", "download_detour": "🎯 全局直连"},
+    ]
+
+    rules = [
+        {"protocol": "dns", "outbound": "dns-out"},
+        {"rule_set": "geosite-ads", "outbound": "🛑 广告拦截"},
+        {"rule_set": "geosite-ai", "outbound": "🤖 AI 服务"},
+        {"rule_set": "geosite-youtube", "outbound": "📹 YouTube"},
+        {"rule_set": "geosite-telegram", "outbound": "📲 Telegram"},
+        {"rule_set": "geosite-github", "outbound": "🐱 GitHub"},
+        {"rule_set": "geosite-cn", "outbound": "🎯 全局直连"},
+        {"rule_set": ["geoip-private", "geoip-cn"], "outbound": "🎯 全局直连"},
+    ]
+
+    sb_config = {
+        "log": {"level": "info", "timestamp": True},
+        "dns": {
+            "servers": [
+                {"tag": "dns_proxy", "type": "https", "server": "1.1.1.1", "path": "/dns-query", "detour": "🚀 节点选择"},
+                {"tag": "dns_direct", "type": "https", "server": "223.5.5.5", "path": "/dns-query", "detour": "🎯 全局直连"},
+                {"tag": "dns_fakeip", "type": "fakeip", "inet4_range": "198.18.0.0/15"}
+            ],
+            "rules": [
+                {"outbound": "any", "server": "dns_direct"}
+            ],
+            "final": "dns_proxy",
+            "strategy": "prefer_ipv4"
+        },
+        "inbounds": [
+            {"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 1080, "sniff": True},
+            {"type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"], "auto_route": True, "strict_route": True}
+        ],
         "outbounds": outbounds,
-        "route": {"rules": [], "final": outbounds[0]["tag"] if outbounds else "direct"},
-    }, ensure_ascii=False, indent=2)
+        "route": {
+            "rule_set": rule_sets,
+            "rules": rules,
+            "final": "🚀 节点选择",
+            "auto_detect_interface": True
+        }
+    }
+    return json.dumps(sb_config, ensure_ascii=False, indent=2)
 
 # ---------- HTTP 服务 ----------
 

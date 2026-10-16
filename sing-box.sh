@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.5.2"
+SCRIPT_VER="2.5.3"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1458,8 +1458,7 @@ sb_config = {
             {
                 "tag": "dns_direct", "type": "https",
                 "server": "223.5.5.5", "path": "/dns-query",
-                "tls": {"enabled": True, "server_name": "dns.alidns.com"},
-                "detour": "DIRECT"
+                "tls": {"enabled": True, "server_name": "dns.alidns.com"}
             },
             {
                 "tag": "dns_fakeip", "type": "fakeip",

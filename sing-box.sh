@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.4.2"
+SCRIPT_VER="2.4.3"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1827,7 +1827,16 @@ update_singbox() {
 
 self_update() {
   local remote_ver tmp script_path
-  script_path="$(realpath "$0" 2>/dev/null || echo "$0")"
+  if command -v realpath >/dev/null 2>&1; then
+    script_path="$(realpath "$0")"
+  elif command -v readlink >/dev/null 2>&1; then
+    script_path="$(readlink -f "$0")"
+  else
+    case "$0" in
+      /*) script_path="$0" ;;
+      *)  script_path="$(pwd)/$0" ;;
+    esac
+  fi
   info "检查脚本更新（当前 v$SCRIPT_VER）..."
   tmp=$(mktemp)
   curl -sL --max-time 20 "https://raw.githubusercontent.com/${REPO}/main/sing-box.sh" -o "$tmp" \

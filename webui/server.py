@@ -421,7 +421,9 @@ def gen_singbox(cfg):
         })
 
     # 3. 基础出站 (移除已在 1.11 弃用的 block 与 dns 虚拟出站)
+    # DIRECT 专供 DNS detour 用（1.15 不认空 direct 出站做 detour）
     infra_outbounds = [
+        {"type": "direct", "tag": "DIRECT"},
         {"type": "direct", "tag": "🎯 全局直连"}
     ]
 

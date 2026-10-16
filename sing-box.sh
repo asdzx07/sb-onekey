@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.5.1"
+SCRIPT_VER="2.5.2"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1413,6 +1413,7 @@ group_outbounds = [
 ]
 
 infra_outbounds = [
+    {"type": "direct", "tag": "DIRECT"},
     {"type": "direct", "tag": "🎯 全局直连"}
 ]
 

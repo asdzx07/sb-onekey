@@ -726,8 +726,9 @@
     <div class="form-grid grid-cols-1">
       <div class="field">
         <div class="field-label">
-          <span>优选 IP 列表 (格式：<code>IP:端口#备注</code> 或 <code>IP</code>)</span>
+          <span>优选 IP 列表 (支持 <code>IP:端口#备注</code>、纯 IP 或 远程 txt/订阅链接)</span>
           <div style="display:flex; gap:6px;">
+            <button type="button" class="btn btn-subtle btn-sm" style="padding:2px 8px; font-size:11px;" onclick="expandRemoteIps()" id="btnExpand">展开远程 txt 源</button>
             <button type="button" class="btn btn-subtle btn-sm" style="padding:2px 8px; font-size:11px;" onclick="insertSampleIps()">填入示例</button>
             <button type="button" class="btn btn-subtle btn-sm" style="padding:2px 8px; font-size:11px;" onclick="clearIps()">清空</button>
           </div>
@@ -1034,7 +1035,8 @@ async function saveAll() {
     });
     const result = await res.json();
     if (result && result.ok) {
-      showToast('配置已持久化保存，订阅链接实时生效', 'ok');
+      const countInfo = result.count ? `（共构建 ${result.count} 个优选节点）` : '';
+      showToast(`配置已保存${countInfo}，订阅实时生效`, 'ok');
       refreshSubUrls();
     } else {
       showToast('保存失败，服务端未确认', 'warn');
@@ -1131,13 +1133,55 @@ function copyCurrentQrUrl() {
 // ------------------------------------------------------------------------------
 // 辅助小工具：填入示例、统计 IP 个数、HTML 转义
 // ------------------------------------------------------------------------------
+async function expandRemoteIps() {
+  const textarea = document.getElementById('ipList');
+  const text = textarea.value.trim();
+  if (!text) {
+    showToast('请先输入包含 http/https 的远程 txt 链接', 'warn');
+    return;
+  }
+  const btn = document.getElementById('btnExpand');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerText = '正在抓取展开…';
+  }
+  try {
+    const res = await fetch('/api/expand_ips', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ipList: text, port: document.getElementById('port').value.trim() || '443' })
+    });
+    const data = await res.json();
+    if (data && data.ok && data.text) {
+      textarea.value = data.text;
+      updateIpCount();
+      showToast(`已成功抓取并展开 ${data.count} 个优选节点！`, 'ok');
+    } else {
+      showToast('未能从指定链接抓取到有效节点，请检查远程源是否可访问', 'warn');
+    }
+  } catch (err) {
+    showToast('展开失败：' + err.message, 'warn');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerText = '展开远程 txt 源';
+    }
+  }
+}
+
 function updateIpCount() {
   const val = document.getElementById('ipList').value;
   const lines = val.split('\n').filter(line => line.trim() && !line.trim().startsWith('#'));
+  const hasRemote = lines.some(l => l.trim().startsWith('http://') || l.trim().startsWith('https://'));
   const badge = document.getElementById('ipCountBadge');
   if (badge) {
-    badge.innerText = `已解析 ${lines.length} 个优选节点`;
-    badge.className = lines.length > 0 ? 'badge badge-primary' : 'badge badge-neutral';
+    if (hasRemote) {
+      badge.innerText = `已录入 ${lines.length} 行 (包含远程 txt 挂载源)`;
+      badge.className = 'badge badge-primary';
+    } else {
+      badge.innerText = `已解析 ${lines.length} 个优选节点`;
+      badge.className = lines.length > 0 ? 'badge badge-primary' : 'badge badge-neutral';
+    }
   }
 }
 

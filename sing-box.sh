@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.4.4"
+SCRIPT_VER="2.4.5"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1874,7 +1874,7 @@ uninstall_all() {
   [ "$yn" = "y" ] || return 0
   systemctl stop sing-box sing-box-sub 2>/dev/null || true
   systemctl disable sing-box sing-box-sub 2>/dev/null || true
-  rm -f "$SB_SERVICE" "$SB_SUB_SERVICE" "$SB_BIN"
+  rm -f "$SB_SERVICE" "$SB_SUB_SERVICE" "$SB_BIN" /usr/local/bin/sb
   rm -rf "$SB_DIR"
   systemctl daemon-reload
   ok "已卸载"
@@ -2057,6 +2057,14 @@ main() {
   done
   [ -x "$SB_BIN" ] || install_singbox
   detect_certs
+
+  # 注册快捷命令 sb，方便下次直接输入 sb 打开脚本
+  local cur_script
+  cur_script="$(realpath "$0" 2>/dev/null || echo "$0")"
+  if [ -f "$cur_script" ] && [ ! -L /usr/local/bin/sb -o "$(readlink -f /usr/local/bin/sb 2>/dev/null)" != "$cur_script" ]; then
+    ln -sf "$cur_script" /usr/local/bin/sb 2>/dev/null || true
+  fi
+
   main_menu
 }
 

@@ -7,7 +7,7 @@ sing-box 服务端一键脚本。只做 sing-box，不掺 xray。Debian / Ubuntu
 ```bash
 curl -L -o sing-box.sh https://raw.githubusercontent.com/asdzx07/sb-onekey/main/sing-box.sh
 chmod +x sing-box.sh
-sudo bash sing-box.sh              # 交互菜单
+sudo bash sing-box.sh              # 交互菜单（运行后自动生成快捷命令 sb，下次直接输入 sb 即可）
 sudo bash sing-box.sh --onekey     # 零交互，一键出 REALITY 节点
 ```
 
@@ -38,7 +38,7 @@ WebUI: http://<服务器IP>:13530
 功能：
 
 - 🖥️ **本机节点**：自动读取本机 sb-onekey 建好的 VLESS+WS(+TLS) 节点，点选即填入表单
-- ⚡️ **优选 IP**：粘贴 Cloudflare 优选 IP 列表（一行一个，`IP:端口#备注`），为每个 IP 生成一条 vless 链接（地址替换为优选 IP，SNI/Host 保持原域名）
+- ⚡️ **优选 IP 与远程 txt 挂载**：支持填入优选 IP 列表（`IP:端口#备注`），更**原生支持挂载远程优选 txt / 订阅文件链接（如 `https://.../hk.txt`）**，系统自动定时抓取、Base64 解码并批量提取优选 IP，一键聚合为高可用节点
 - 📋 **订阅链接**：`/sub/vless`、`/sub/base64`、`/sub/clash`、`/sub/singbox` 四个直链，改了优选 IP 点保存即生效，不用重新复制；带二维码
 - 节点名自动去重（重名的加 `-2`、`-3` 后缀，Clash 不会报 `duplicate name`）
 

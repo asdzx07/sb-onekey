@@ -24,26 +24,113 @@ def save_config(cfg):
     with open(CONFIG_FILE, "w") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
+import time
+import urllib.request
+
+REMOTE_CACHE = {}  # url -> (timestamp, text)
+CACHE_TTL = 600    # 远程源缓存 10 分钟
+
+def fetch_remote_text(url):
+    now = time.time()
+    if url in REMOTE_CACHE:
+        ts, text = REMOTE_CACHE[url]
+        if now - ts < CACHE_TTL and text:
+            return text
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            content = resp.read()
+            try:
+                text = content.decode("utf-8")
+            except Exception:
+                text = content.decode("latin1", errors="ignore")
+            
+            # 自动检测 Base64 编码并解码
+            clean_text = text.strip()
+            if not any(proto in clean_text for proto in ["vless://", "vmess://", "http://", "https://", "#"]) and len(clean_text) > 30:
+                try:
+                    decoded = base64.b64decode(clean_text).decode("utf-8", errors="ignore")
+                    if any(c in decoded for c in ["vless://", "vmess://", ":", "\n"]):
+                        text = decoded
+                except Exception:
+                    pass
+            REMOTE_CACHE[url] = (now, text)
+            return text
+    except Exception as e:
+        if url in REMOTE_CACHE:
+            return REMOTE_CACHE[url][1]
+        return ""
+
+def parse_single_line(line, default_port="443"):
+    t = line.strip()
+    if not t or t.startswith("#") or t.startswith("//"):
+        return None
+
+    # 1. 匹配标准协议链接 (如 vless://, trojan://, ss://) 并提取目标 IP、端口和备注
+    for proto in ("vless://", "trojan://", "ss://"):
+        if t.startswith(proto):
+            label = ""
+            url_part = t
+            if "#" in t:
+                url_part, raw_label = t.split("#", 1)
+                label = urllib.parse.unquote(raw_label.strip())
+            body = url_part.split("://", 1)[1]
+            if "@" in body:
+                body = body.split("@", 1)[1]
+            host_part = body.split("?", 1)[0].split("/", 1)[0]
+            ip, port = host_part, default_port
+            if ":" in host_part and not host_part.startswith("["):
+                parts = host_part.rsplit(":", 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    ip, port = parts[0], parts[1]
+            ip = ip.strip("[]")
+            if not label:
+                label = ip
+            return {"ip": ip, "port": port, "label": label}
+
+    # 2. 匹配常见格式：IP:端口#备注 或 IP#备注 或 纯IP
+    addr, label = t, ""
+    if "#" in t:
+        addr, label = t.split("#", 1)
+        addr, label = addr.strip(), label.strip()
+    ip, port = addr.strip(), default_port
+    if ":" in addr and not addr.startswith("["):
+        parts = addr.rsplit(":", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            ip, port = parts[0], parts[1]
+    ip = ip.strip("[]")
+    if not label:
+        label = ip
+    return {"ip": ip, "port": port, "label": label}
+
 def parse_ips(ip_text, default_port="443"):
     result = []
-    for line in (ip_text or "").split("\n"):
-        t = line.strip()
-        if not t or t.startswith("#"):
+    for raw_line in (ip_text or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
             continue
-        addr, label = t, ""
-        if "#" in t:
-            addr, label = t.split("#", 1)
-            addr, label = addr.strip(), label.strip()
-        ip, port = addr.strip(), default_port
-        # IPv6 简单处理
-        if ":" in addr and not addr.startswith("["):
-            parts = addr.rsplit(":", 1)
-            if len(parts) == 2 and parts[1].isdigit():
-                ip, port = parts
-        ip = ip.strip("[]")
-        if not label:
-            label = ip
-        result.append({"ip": ip, "port": port, "label": label})
+
+        # 挂载的远程 txt / 订阅链接 (http:// 或 https://)
+        if line.startswith("http://") or line.startswith("https://"):
+            remote_text = fetch_remote_text(line)
+            for sub_line in remote_text.splitlines():
+                item = parse_single_line(sub_line, default_port)
+                if item and item.get("ip"):
+                    ip_clean = item["ip"].strip()
+                    if not ip_clean.startswith("http://") and not ip_clean.startswith("https://") and "/" not in ip_clean:
+                        result.append(item)
+            continue
+
+        item = parse_single_line(line, default_port)
+        if item and item.get("ip"):
+            ip_clean = item["ip"].strip()
+            if not ip_clean.startswith("http://") and not ip_clean.startswith("https://") and "/" not in ip_clean:
+                result.append(item)
     return result
 
 def dedup_labels(items):
@@ -158,7 +245,14 @@ class Handler(SimpleHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             cfg = json.loads(self.rfile.read(length) or b"{}")
             save_config(cfg)
-            self.send_json({"ok": True})
+            ips = parse_ips(cfg.get("ipList", ""), cfg.get("port", "443"))
+            self.send_json({"ok": True, "count": len(ips)})
+        elif parsed.path == "/api/expand_ips":
+            length = int(self.headers.get("Content-Length", 0))
+            data = json.loads(self.rfile.read(length) or b"{}")
+            ips = parse_ips(data.get("ipList", ""), data.get("port", "443"))
+            formatted = "\n".join([f"{item['ip']}:{item['port']}#{item['label']}" for item in ips])
+            self.send_json({"ok": True, "count": len(ips), "text": formatted})
         else:
             self.send_response(404)
             self.end_headers()

@@ -147,15 +147,24 @@ def dedup_labels(items):
         out.append({**it, "label": label})
     return out
 
+def clean_ws_path(path):
+    p = (path or "").strip()
+    if not p:
+        return "/"
+    if not p.startswith("/"):
+        p = "/" + p
+    return p
+
 def build_vless_links(cfg):
     ips = dedup_labels(parse_ips(cfg.get("ipList", ""), cfg.get("port", "443")))
     links = []
+    ws_path = clean_ws_path(cfg.get("path"))
     for it in ips:
         q = urllib.parse.urlencode({
             "security": "tls", "sni": cfg["host"], "type": "ws",
-            "path": cfg.get("path") or "/", "host": cfg["host"],
+            "path": ws_path, "host": cfg["host"],
             "fp": "chrome", "encryption": "none",
-        })
+        }, safe="/")
         links.append(f"vless://{cfg['uuid']}@{it['ip']}:{it['port']}?{q}#{urllib.parse.quote(it['label'])}")
     return links, ips
 
@@ -194,6 +203,7 @@ def gen_clash(cfg):
         "",
         "proxies:",
     ]
+    ws_path = clean_ws_path(cfg.get("path"))
     for it in ips:
         out.append(f'  - name: "{it["label"]}"')
         out.append("    type: vless")
@@ -205,7 +215,7 @@ def gen_clash(cfg):
         out.append(f"    servername: {cfg['host']}")
         out.append("    network: ws")
         out.append("    ws-opts:")
-        out.append(f"      path: {cfg.get('path') or '/'}")
+        out.append(f"      path: {ws_path}")
         out.append("      headers:")
         out.append(f"        Host: {cfg['host']}")
 
@@ -355,6 +365,7 @@ def gen_singbox(cfg):
     node_tags = [it["label"] for it in ips]
 
     outbounds = []
+    ws_path = clean_ws_path(cfg.get("path"))
     # 单节点
     for it in ips:
         outbounds.append({
@@ -363,7 +374,7 @@ def gen_singbox(cfg):
             "uuid": cfg["uuid"],
             "tls": {"enabled": True, "server_name": cfg["host"],
                     "utls": {"enabled": True, "fingerprint": "chrome"}},
-            "transport": {"type": "ws", "path": cfg.get("path") or "/",
+            "transport": {"type": "ws", "path": ws_path,
                           "headers": {"Host": cfg["host"]}},
         })
 

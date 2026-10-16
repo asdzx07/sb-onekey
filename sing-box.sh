@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.4.6"
+SCRIPT_VER="2.4.7"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u

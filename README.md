@@ -25,6 +25,28 @@ sudo bash sing-box.sh --onekey     # 零交互，一键出 REALITY 节点
 | 更新内核 | sing-box 内核更新，失败自动回滚旧版 |
 | 网络优化 | BBR 一键开；BBRv3 走 XanMod 内核（自动选 x64v2/x64v3，需重启）|
 | 脚本自更新 | 从 GitHub 拉新版，语法校验后替换 |
+| WebUI 管理 | 优选 IP 订阅生成器 Web 面板（见下） |
+
+## WebUI（优选 IP 订阅生成器）
+
+安装脚本时自动部署，端口 `13530`，主菜单顶部显示地址：
+
+```
+WebUI: http://<服务器IP>:13530
+```
+
+功能：
+
+- 🖥️ **本机节点**：自动读取本机 sb-onekey 建好的 VLESS+WS(+TLS) 节点，点选即填入表单
+- ⚡️ **优选 IP**：粘贴 Cloudflare 优选 IP 列表（一行一个，`IP:端口#备注`），为每个 IP 生成一条 vless 链接（地址替换为优选 IP，SNI/Host 保持原域名）
+- 📋 **订阅链接**：`/sub/vless`、`/sub/base64`、`/sub/clash`、`/sub/singbox` 四个直链，改了优选 IP 点保存即生效，不用重新复制；带二维码
+- 节点名自动去重（重名的加 `-2`、`-3` 后缀，Clash 不会报 `duplicate name`）
+
+典型用法（美国 VPS 直连慢，套 CF CDN）：
+
+1. sb-onekey 建 VLESS+WS+TLS 节点，域名填套了 CF 的那个
+2. 打开 WebUI，点选本机节点，粘贴优选 IP，保存
+3. 把 `http://IP:13530/sub/clash` 填到 Clash Verge Rev 里当订阅
 
 ## 设计要点
 

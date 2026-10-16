@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.4.1"
+SCRIPT_VER="2.4.2"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1826,7 +1826,8 @@ update_singbox() {
 }
 
 self_update() {
-  local remote_ver tmp
+  local remote_ver tmp script_path
+  script_path="$(realpath "$0" 2>/dev/null || echo "$0")"
   info "检查脚本更新（当前 v$SCRIPT_VER）..."
   tmp=$(mktemp)
   curl -sL --max-time 20 "https://raw.githubusercontent.com/${REPO}/main/sing-box.sh" -o "$tmp" \
@@ -1840,7 +1841,7 @@ self_update() {
   else
     info "发现新版脚本 v$remote_ver"
     bash -n "$tmp" || { err "新版脚本语法校验失败，放弃更新"; rm -f "$tmp"; return 1; }
-    cp "$tmp" "$0"; chmod +x "$0"; rm -f "$tmp"
+    cp "$tmp" "$script_path"; chmod +x "$script_path"; rm -f "$tmp"
     ok "脚本已更新至 v$remote_ver"
   fi
 
@@ -1848,7 +1849,14 @@ self_update() {
   info "正在同步自动重装/更新 WebUI（优选 IP 订阅生成器）..."
   install_webui
 
-  ok "脚本与 WebUI 均已更新完毕！"
+  if [ "${1:-}" = "cli" ]; then
+    ok "脚本与 WebUI 均已更新完毕！"
+    return 0
+  fi
+
+  ok "更新全部完成！正在为您自动重新进入主菜单..."
+  sleep 1
+  exec bash "$script_path"
 }
 
 uninstall_all() {
@@ -2032,7 +2040,7 @@ main() {
         QUIET=1; install_singbox; detect_certs; add_ws_tls "$port" "$domain" "$cert" "$key"; exit $? ;;
       --show)      show_nodes; exit 0 ;;
       --update)    update_singbox; exit $? ;;
-      --self-update) self_update; exit $? ;;
+      --self-update) self_update "cli"; exit $? ;;
       --uninstall) uninstall_all; exit $? ;;
       -h|--help)   usage; exit 0 ;;
       *) err "未知参数: $1"; usage; exit 1 ;;

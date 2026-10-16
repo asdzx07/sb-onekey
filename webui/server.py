@@ -491,6 +491,7 @@ def gen_singbox(cfg):
         ],
         "outbounds": outbounds,
         "route": {
+            "default_domain_resolver": "dns_direct",
             "rule_set": rule_sets,
             "rules": rules,
             "final": "🚀 节点选择",

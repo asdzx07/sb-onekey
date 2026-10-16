@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.5.3"
+SCRIPT_VER="2.5.4"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1480,6 +1480,7 @@ sb_config = {
     ],
     "outbounds": outbounds,
     "route": {
+        "default_domain_resolver": "dns_direct",
         "rule_set": rule_sets,
         "rules": sb_rules,
         "final": "🚀 节点选择",

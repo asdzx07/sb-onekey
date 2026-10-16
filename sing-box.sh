@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.4.8"
+SCRIPT_VER="2.4.9"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1453,19 +1453,17 @@ sb_config = {
         "servers": [
             {"tag": "dns_fakeip", "type": "fakeip", "inet4_range": "198.18.0.0/15"},
             {"tag": "dns_proxy", "type": "https", "server": "1.1.1.1", "detour": "🚀 节点选择"},
-            {"tag": "dns_direct", "type": "https", "server": "223.5.5.5", "detour": "🎯 全局直连"},
-            {"tag": "dns_block", "type": "rcode", "rcode": "REFUSED"}
+            {"tag": "dns_direct", "type": "https", "server": "223.5.5.5", "detour": "🎯 全局直连"}
         ],
         "rules": [
             {"inbound": ["tun-in"], "query_type": ["A", "AAAA"], "server": "dns_fakeip"},
-            {"rule_set": "geosite-ads", "server": "dns_block"},
+            {"rule_set": "geosite-ads", "action": "reject"},
             {"rule_set": "geosite-cn", "server": "dns_direct"},
             {"clash_mode": "Direct", "server": "dns_direct"},
             {"clash_mode": "Global", "server": "dns_proxy"}
         ],
         "final": "dns_proxy",
-        "strategy": "prefer_ipv4",
-        "independent_cache": True
+        "strategy": "prefer_ipv4"
     },
     "inbounds": [
         {"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080, "sniff": True},

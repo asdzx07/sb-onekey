@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.3.0"
+SCRIPT_VER="2.4.0"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -366,12 +366,18 @@ EOF
 WEBUI_DIR="/opt/pref-sub"
 WEBUI_PORT="13530"
 install_webui() {
-  # 从脚本自带 webui/ 目录安装（仓库合并后自带，无需再 clone）
+  # 优先从脚本同级 webui/ 目录安装；若为单脚本运行则从 GitHub 远程拉取
   local src_dir
   src_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/webui"
-  [ -d "$src_dir" ] || { warn "未找到 webui 目录，跳过 WebUI 安装"; return 0; }
   mkdir -p "$WEBUI_DIR"
-  cp -f "$src_dir/index.html" "$src_dir/server.py" "$WEBUI_DIR/"
+  if [ -d "$src_dir" ] && [ -f "$src_dir/index.html" ] && [ -f "$src_dir/server.py" ]; then
+    cp -f "$src_dir/index.html" "$src_dir/server.py" "$WEBUI_DIR/"
+  else
+    info "正在从 GitHub 获取最新 WebUI 前后端组件..."
+    curl -sL --max-time 15 "https://raw.githubusercontent.com/${REPO}/main/webui/index.html" -o "$WEBUI_DIR/index.html" \
+      && curl -sL --max-time 15 "https://raw.githubusercontent.com/${REPO}/main/webui/server.py" -o "$WEBUI_DIR/server.py" \
+      || { warn "获取 WebUI 文件失败，请检查网络"; return 1; }
+  fi
   cat > /etc/systemd/system/pref-sub.service <<EOF
 [Unit]
 Description=Pref-Sub Web UI
@@ -387,7 +393,7 @@ EOF
   systemctl daemon-reload
   systemctl enable pref-sub >/dev/null 2>&1
   systemctl restart pref-sub >/dev/null 2>&1
-  ok "WebUI 已安装: $(webui_url)"
+  ok "WebUI 已安装/更新: $(webui_url)"
 }
 webui_url() {
   local ip
@@ -1821,6 +1827,10 @@ self_update() {
   info "发现新版 v$remote_ver"
   bash -n "$tmp" || { err "新版脚本语法校验失败，放弃更新"; rm -f "$tmp"; return 1; }
   cp "$tmp" "$0"; chmod +x "$0"; rm -f "$tmp"
+  if [ -d "$WEBUI_DIR" ]; then
+    info "正在同步更新 WebUI 组件..."
+    install_webui
+  fi
   ok "已更新到 v$remote_ver，请重新运行脚本"
 }
 

@@ -468,7 +468,7 @@ def gen_singbox(cfg):
                     "tag": "dns_direct", "type": "https",
                     "server": "223.5.5.5", "path": "/dns-query",
                     "tls": {"enabled": True, "server_name": "dns.alidns.com"},
-                    "detour": "🎯 全局直连"
+                    "detour": "DIRECT"
                 },
                 {
                     "tag": "dns_fakeip", "type": "fakeip",

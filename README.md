@@ -15,7 +15,7 @@ sudo bash sing-box.sh --onekey     # 零交互，一键出 REALITY 节点
 
 | 菜单 | 说明 |
 |------|------|
-| 添加节点 | 6 种主流协议：VLESS+REALITY、VLESS+WS+TLS、VLESS+WS（明文）、TUIC v5、Hysteria2、AnyTLS |
+| 添加节点 | 7 种主流协议：VLESS+REALITY、VLESS+WS+TLS、VLESS+WS（明文）、TUIC v5、Hysteria2、AnyTLS、NaiveProxy |
 | 修改节点 | 改端口/UUID/密码/备注/域名，改完自动校验+回滚 |
 | 删除节点 | 删前备份，校验失败自动回滚 |
 | 查看节点 | 入站列表 + 全部客户端链接 |
@@ -65,6 +65,7 @@ sudo bash sing-box.sh --add-reality [--port 443] [--domain www.microsoft.com]
 sudo bash sing-box.sh --add-tuic [--port 8443]
 sudo bash sing-box.sh --add-hy2 [--port 8443]
 sudo bash sing-box.sh --add-anytls [--port 8443]
+sudo bash sing-box.sh --add-naive [--port 8443]
 sudo bash sing-box.sh --add-ws [--port 1080]
 sudo bash sing-box.sh --add-ws-tls --domain example.com \
   --cert /root/.acme.sh/example.com/fullchain.cer \

@@ -52,10 +52,10 @@ def fetch_remote_text(url):
             
             # 自动检测 Base64 编码并解码
             clean_text = text.strip()
-            if not any(proto in clean_text for proto in ["vless://", "vmess://", "http://", "https://", "#"]) and len(clean_text) > 30:
+            if not any(proto in clean_text for proto in ["vless://", "vmess://", "trojan://", "hysteria2://", "tuic://", "anytls://", "naive+https://", "http://", "https://", "#"]) and len(clean_text) > 30:
                 try:
                     decoded = base64.b64decode(clean_text).decode("utf-8", errors="ignore")
-                    if any(c in decoded for c in ["vless://", "vmess://", ":", "\n"]):
+                    if any(c in decoded for c in ["vless://", "vmess://", "trojan://", "hysteria2://", "tuic://", "anytls://", "naive+https://", ":", "\n"]):
                         text = decoded
                 except Exception:
                     pass
@@ -71,8 +71,8 @@ def parse_single_line(line, default_port="443"):
     if not t or t.startswith("#") or t.startswith("//"):
         return None
 
-    # 1. 匹配标准协议链接 (如 vless://, trojan://, ss://) 并提取目标 IP、端口和备注
-    for proto in ("vless://", "trojan://", "ss://"):
+    # 1. 匹配标准协议链接 (如 vless://, trojan://, ss://, naive+https:// 等) 并提取目标 IP、端口和备注
+    for proto in ("vless://", "trojan://", "ss://", "hysteria2://", "tuic://", "anytls://", "naive+https://"):
         if t.startswith(proto):
             label = ""
             url_part = t

@@ -1,13 +1,13 @@
 #!/bin/bash
 # sing-box 一键脚本 v2 (server 端)
-# 6 种主流协议 / 交互+一键双模式 / 证书自动检测 / 订阅三件套
+# 7 种主流协议 / 交互+一键双模式 / 证书自动检测 / 订阅三件套
 # 用法: sudo bash sing-box.sh              (交互菜单)
 #       sudo bash sing-box.sh --onekey     (零交互一键搭建 REALITY)
 #       sudo bash sing-box.sh --add-reality [--port 443] [--domain www.microsoft.com]
-#       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-ws | --add-ws-tls
+#       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-naive | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.5.5"
+SCRIPT_VER="2.6.0"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -132,6 +132,12 @@ ask_uuid() {
   local input
   read -rp "UUID [回车=随机生成]: " input
   echo "${input:-$(cat /proc/sys/kernel/random/uuid)}"
+}
+
+ask_username() {
+  local input
+  read -rp "用户名 [回车=随机生成]: " input
+  echo "${input:-user_$(openssl rand -hex 3)}"
 }
 
 ask_password() {
@@ -1028,6 +1034,71 @@ EOF
   finish_add "$tag" "$meta" "AnyTLS" "${links[@]}"
 }
 
+# ---------- 7. NaiveProxy ----------
+add_naive() {
+  local port="${1:-}"
+  local username="${2:-}"
+  local passwd="${3:-}"
+  local tag links=()
+  info "添加 NaiveProxy"
+  if [ "$QUIET" = "1" ]; then
+    [ -z "$port" ] && port=$(random_port)
+    ensure_port_free "$port" || return 1
+    [ -z "$username" ] && username="user_$(openssl rand -hex 3)"
+    [ -z "$passwd" ] && passwd=$(openssl rand -hex 12)
+    quiet_link_addrs || return 1
+    CERT_DOMAINS=("bing.com")
+    local c="$SB_CERTS/naive-${port}.crt" k="$SB_CERTS/naive-${port}.key"
+    mkdir -p "$SB_CERTS"
+    openssl req -x509 -newkey rsa:2048 -keyout "$k" -out "$c" -days 3650 -nodes \
+      -subj "/CN=bing.com" >/dev/null 2>&1
+    chmod 600 "$c" "$k"
+    CERT_PATHS=("$c"); CERT_KEYS=("$k"); CERT_SELF=(1)
+  else
+    if [ -n "$port" ]; then ensure_port_free "$port" || return 1
+    else port=$(ask_port "NaiveProxy"); fi
+    show_detected_certs
+    ask_link_addrs || return 1
+    resolve_link_certs || return 1
+    if [ ${#CERT_DOMAINS[@]} -eq 0 ]; then
+      fallback_cert_domain || return 1
+    fi
+    if [ -z "$username" ]; then username=$(ask_username); fi
+    if [ -z "$passwd" ]; then passwd=$(ask_password); fi
+  fi
+  tag="naive-${port}"
+  build_tls_cert_json '"alpn":["h3","h2"],' || return 1
+
+  PENDING_INBOUND="{\"type\":\"naive\",\"tag\":\"$tag\",\"listen\":\"::\",\"listen_port\":$port,"
+  PENDING_INBOUND+="\"users\":[{\"username\":\"$username\",\"password\":\"$passwd\"}],"
+  PENDING_INBOUND+="\"tls\":{$TLS_CERT_JSON}}"
+
+  local h sni ins suffix
+  for h in "$LINK_V4" "$LINK_V6"; do
+    [ -z "$h" ] && continue
+    sni=$(sni_for "$h")
+    ins=$(insecure_for "$h" "insecure")
+    suffix=""; { [ "$h" = "$LINK_V6" ] && [ -n "$LINK_V4" ]; } && suffix="-v6"
+    links+=("naive+https://${username}:${passwd}@${h}:${port}?sni=${sni}${ins}#Naive-${port}${suffix}")
+  done
+
+  local meta hosts_json
+  build_certs_json
+  if [ "$META_SELFSIGNED" = "true" ]; then
+    warn "提示: NaiveProxy 客户端默认强制校验证书。当前使用自签名证书，官方原版客户端可能报错拒绝连接，建议配置受信任 CA 证书！"
+  fi
+  hosts_json=$(python3 -c "import json;print(json.dumps([x for x in ['$LINK_V4','$LINK_V6'] if x]))")
+  meta=$(cat <<EOF
+{"tag":"$tag","proto":"naive","name":"Naive-${port}","port":$port,
+ "username":"$username","uuid":null,"password":"$passwd","domain":"${CERT_DOMAINS[0]}","path":null,
+ "pubkey":null,"shortid":null,"certs":$CERTS_JSON,"selfsigned":$META_SELFSIGNED,
+ "link_v4":"$LINK_V4","link_v6":"$LINK_V6","sni_v4":"$SNI_V4","sni_v6":"$SNI_V6","hosts":$hosts_json,
+ "created":"$(date '+%F %T')"}
+EOF
+)
+  finish_add "$tag" "$meta" "NaiveProxy" "${links[@]}"
+}
+
 # 生成 certs 数组 JSON → CERTS_JSON；设置 META_SELFSIGNED
 build_certs_json() {
   CERTS_JSON=$(python3 -c "
@@ -1139,6 +1210,10 @@ def gen_links(n):
         elif p == "anytls":
             ins = "&insecure=1" if cert_ss(n, sni) else ""
             links.append(f"anytls://{n['password']}@{h}:{port}?sni={sni}{ins}#{name}")
+        elif p == "naive":
+            ins = "&insecure=1" if cert_ss(n, sni) else ""
+            uname = n.get("username", "")
+            links.append(f"naive+https://{uname}:{n['password']}@{h}:{port}?sni={sni}{ins}#{name}")
     return links
 
 # 1) v2rayN：分享链接 base64
@@ -1218,6 +1293,16 @@ for n in nodes:
   port: {port}
   password: {n['password']}
   client-fingerprint: chrome
+  sni: {sni}
+  skip-cert-verify: {skip}""")
+        elif p == "naive":
+            L.append(f"""- name: "{pname}"
+  type: http
+  server: {h}
+  port: {port}
+  username: {n.get('username', '')}
+  password: {n['password']}
+  tls: true
   sni: {sni}
   skip-cert-verify: {skip}""")
 L.append("")
@@ -1390,6 +1475,11 @@ for n in nodes:
                 "password": n["password"],
                 "tls": {"enabled": True, "server_name": sni,
                     "utls": {"enabled": True, "fingerprint": "chrome"},
+                    "insecure": cert_ss(n, sni)}})
+        elif p == "naive":
+            node_outbounds.append({"type": "naive", "tag": tag, "server": h, "server_port": port,
+                "username": n.get("username", ""), "password": n["password"],
+                "tls": {"enabled": True, "server_name": sni,
                     "insecure": cert_ss(n, sni)}})
 
 group_outbounds = [
@@ -1705,6 +1795,10 @@ for h, sni_stored in hosts:
     elif q == "anytls":
         ins = "&insecure=1" if cert_ss(n, sni) else ""
         links.append(f"anytls://{n['password']}@{h}:{port}?sni={sni}{ins}#{name}{suffix}")
+    elif q == "naive":
+        ins = "&insecure=1" if cert_ss(n, sni) else ""
+        uname = n.get("username", "")
+        links.append(f"naive+https://{uname}:{n['password']}@{h}:{port}?sni={sni}{ins}#{name}{suffix}")
 n["links"] = links
 n["hosts"] = hosts
 json.dump(n, open(p, "w"), indent=2, ensure_ascii=False)
@@ -1731,7 +1825,11 @@ modify_node() {
   proto=$(python3 -c "import json;print(json.load(open('$SB_NODES/$tag.json'))['proto'])")
   echo "修改 [$tag]："
   echo "  1) 端口"
-  echo "  2) UUID"
+  if [ "$proto" = "naive" ]; then
+    echo "  2) 用户名"
+  else
+    echo "  2) UUID"
+  fi
   echo "  3) 密码"
   echo "  4) 备注名"
   echo "  5) 链接地址（v4/v6 域名）"
@@ -1752,21 +1850,33 @@ modify_node() {
         tag="$newtag"
       fi ;;
     2)
-      newval=$(ask_uuid)
-      json_update_inbound "$tag" "{\"users\": [{\"uuid\": \"$newval\"}]}"
-      # 注意：tuic 的 users 含 password，需保留
-      if [ "$proto" = "tuic" ]; then
+      if [ "$proto" = "naive" ]; then
+        newval=$(ask_username)
         local pw
         pw=$(python3 -c "import json;print(json.load(open('$SB_NODES/$tag.json'))['password'])")
-        json_update_inbound "$tag" "{\"users\": [{\"uuid\": \"$newval\", \"password\": \"$pw\"}]}"
-      fi
-      update_node_field "$tag" "uuid" "$newval" ;;
+        json_update_inbound "$tag" "{\"users\": [{\"username\": \"$newval\", \"password\": \"$pw\"}]}"
+        update_node_field "$tag" "username" "$newval"
+      else
+        newval=$(ask_uuid)
+        json_update_inbound "$tag" "{\"users\": [{\"uuid\": \"$newval\"}]}"
+        # 注意：tuic 的 users 含 password，需保留
+        if [ "$proto" = "tuic" ]; then
+          local pw
+          pw=$(python3 -c "import json;print(json.load(open('$SB_NODES/$tag.json'))['password'])")
+          json_update_inbound "$tag" "{\"users\": [{\"uuid\": \"$newval\", \"password\": \"$pw\"}]}"
+        fi
+        update_node_field "$tag" "uuid" "$newval"
+      fi ;;
     3)
       newval=$(ask_password)
       if [ "$proto" = "tuic" ]; then
         local uuid
         uuid=$(python3 -c "import json;print(json.load(open('$SB_NODES/$tag.json'))['uuid'])")
         json_update_inbound "$tag" "{\"users\": [{\"uuid\": \"$uuid\", \"password\": \"$newval\"}]}"
+      elif [ "$proto" = "naive" ]; then
+        local uname
+        uname=$(python3 -c "import json;print(json.load(open('$SB_NODES/$tag.json'))['username'])")
+        json_update_inbound "$tag" "{\"users\": [{\"username\": \"$uname\", \"password\": \"$newval\"}]}"
       else
         json_update_inbound "$tag" "{\"users\": [{\"password\": \"$newval\"}]}"
       fi
@@ -1782,13 +1892,14 @@ modify_node() {
       update_node_field "$tag" "link_v6" "$LINK_V6"
       if [ "$proto" = "vless-reality" ]; then
         : # REALITY 无需证书，sni 仍是伪装域名
-      elif [[ "$proto" == "tuic" || "$proto" == "hy2" || "$proto" == "anytls" || "$proto" == "vless-ws-tls" ]]; then
+      elif [[ "$proto" == "tuic" || "$proto" == "hy2" || "$proto" == "anytls" || "$proto" == "vless-ws-tls" || "$proto" == "naive" ]]; then
         resolve_link_certs || { cp "$SB_CONF.bak" "$SB_CONF"; err "已回滚"; return 1; }
         if [ ${#CERT_DOMAINS[@]} -eq 0 ]; then
           fallback_cert_domain || { cp "$SB_CONF.bak" "$SB_CONF"; err "已回滚"; return 1; }
         fi
         local extra=""
         { [ "$proto" = "tuic" ] || [ "$proto" = "hy2" ]; } && extra='"alpn":["h3"],'
+        [ "$proto" = "naive" ] && extra='"alpn":["h3","h2"],'
         build_tls_cert_json "$extra"
         SB_CONF="$SB_CONF" UPTAG="$tag" NEW_TLS="$TLS_CERT_JSON" python3 - <<'PYEOF3'
 import json, os
@@ -2090,6 +2201,7 @@ add_node_menu() {
     echo "  4. TUIC v5"
     echo "  5. Hysteria2"
     echo "  6. AnyTLS"
+    echo "  7. NaiveProxy (Chromium真指纹/极致防封)"
     echo "  0. 返回"
     input=$(read_choice "选择 (可多选，如 1 4 5，空格分隔): ")
     [ "${input:-}" = "0" ] && return
@@ -2097,7 +2209,7 @@ add_node_menu() {
     local sel nums=()
     for sel in ${input//,/ }; do
       case "$sel" in
-        1|2|3|4|5|6)
+        1|2|3|4|5|6|7)
           [[ " ${nums[*]} " != *" $sel "* ]] && nums+=("$sel") ;;
         *) warn "忽略无效选项: $sel" ;;
       esac
@@ -2112,6 +2224,7 @@ add_node_menu() {
         4) add_tuic ;;
         5) add_hy2 ;;
         6) add_anytls ;;
+        7) add_naive ;;
       esac
     done
   done
@@ -2217,6 +2330,7 @@ usage() {
   sudo bash sing-box.sh --add-tuic [--port 8443]
   sudo bash sing-box.sh --add-hy2 [--port 8443]
   sudo bash sing-box.sh --add-anytls [--port 8443]
+  sudo bash sing-box.sh --add-naive [--port 8443]
   sudo bash sing-box.sh --add-ws [--port 1080]
   sudo bash sing-box.sh --add-ws-tls --domain example.com --cert /path/fullchain --key /path/key [--port 443]
   sudo bash sing-box.sh --show | --update | --self-update | --uninstall
@@ -2242,6 +2356,8 @@ main() {
         QUIET=1; install_singbox; detect_certs; add_hy2 "$port"; exit $? ;;
       --add-anytls)
         QUIET=1; install_singbox; detect_certs; add_anytls "$port"; exit $? ;;
+      --add-naive)
+        QUIET=1; install_singbox; detect_certs; add_naive "$port"; exit $? ;;
       --add-ws)
         QUIET=1; install_singbox; detect_certs; add_ws "$port"; exit $? ;;
       --add-ws-tls)

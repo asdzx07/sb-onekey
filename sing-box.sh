@@ -7,7 +7,7 @@
 #       sudo bash sing-box.sh --add-tuic | --add-hy2 | --add-anytls | --add-naive | --add-ws | --add-ws-tls
 #       sudo bash sing-box.sh --show | --update | --self-update | --uninstall
 
-SCRIPT_VER="2.6.0"
+SCRIPT_VER="2.6.1"
 REPO="asdzx07/sb-onekey"   # 发布后如改名只改这一行
 
 set -u
@@ -1229,6 +1229,8 @@ L.append("proxies:")
 proxy_names = []
 for n in nodes:
     port, name, p = n["port"], n["name"], n["proto"]
+    if p == "naive":
+        continue  # Mihomo 暂未实现 Naive 规范的 Padding 协议扩展，直连会被 sing-box 服务端拦截拒绝，此处跳过以防污染 Clash 节点列表
     for h_raw, sni in link_hosts(n):
         skip = "true" if cert_ss(n, sni) else "false"
         h = bare_host(h_raw)
@@ -1293,16 +1295,6 @@ for n in nodes:
   port: {port}
   password: {n['password']}
   client-fingerprint: chrome
-  sni: {sni}
-  skip-cert-verify: {skip}""")
-        elif p == "naive":
-            L.append(f"""- name: "{pname}"
-  type: http
-  server: {h}
-  port: {port}
-  username: {n.get('username', '')}
-  password: {n['password']}
-  tls: true
   sni: {sni}
   skip-cert-verify: {skip}""")
 L.append("")
